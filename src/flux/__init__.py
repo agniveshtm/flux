@@ -1,0 +1,1 @@
+"""flux - an offline file converter tool"""
