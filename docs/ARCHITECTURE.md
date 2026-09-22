@@ -31,14 +31,43 @@ flowchart LR
 
 | Method | Arguments | Returns | Errors |
 |--------|-----------|---------|--------|
-| `convert` | `{ files: File[], targetFormat: string, options?: object }` | `{ jobId: string }` | `VALIDATION_ERROR`, `UNSUPPORTED_FORMAT` |
+| `convert` | `{ files: { name, size, type, path }[], targetFormat: string, options?: { outputDir: string } }` | `{ jobId: string }` | `VALIDATION_ERROR`, `UNSUPPORTED_FORMAT` |
 | `getProgress` | `{ jobId: string }` | `{ status: 'pending'\|'running'\|'complete'\|'error', progress: 0-100, outputPaths?: string[], error?: string }` | `NOT_FOUND` |
 | `cancel` | `{ jobId: string }` | `{ cancelled: boolean }` | `NOT_FOUND`, `ALREADY_COMPLETE` |
 | `getSupportedFormats` | — | `{ input: string[], output: string[] }` | — |
 | `pickFiles` | `{ multiple?: boolean }` | `{ paths: string[] }` | `CANCELLED` |
 | `pickOutputDir` | — | `{ path: string }` | `CANCELLED` |
+| `openOutputDir` | `{ path: string }` | `{ opened: boolean }` | `VALIDATION_ERROR`, `OPEN_ERROR` |
+| `getFilePreview` | `{ path: string }` | `{ dataUrl: string }` | `VALIDATION_ERROR` |
 
 **Error shape**: `{ code: string, message: string, details?: object }`
+
+### Dialog results
+
+`create_file_dialog` does not return a consistent type: the WinForms backend
+returns a bare string for a single-select OPEN dialog, a tuple of paths for a
+multi-select one, and a single-element tuple for FOLDER - the folder dialog is
+a re-purposed `OpenFileDialog` whose `FileNames` list is re-wrapped
+(`webview/platforms/winforms.py`, `OpenFolderDialog.show`). Selections are
+therefore normalized (`_dialog_paths` / `_first_path`) instead of stringified:
+`str()` on the tuple stores repr text (`"('C:\\dir',)"`, separators doubled),
+which no filesystem call accepts and which made every conversion fail with
+`The output directory does not exist`. The frontend applies the same
+normalization (`normalizeDirPath`) to what the picker returns and to the value
+it reads back from `localStorage`, so a directory persisted in the unusable
+shape by an earlier build is migrated instead of re-used.
+
+### Dropped files
+
+A native drop reaches the page as File objects only - the paths of the dropped
+files live in WebView2's `CoreWebView2File` additional objects, which pywebview
+hands to Python exclusively while a Python-side DOM drop listener is registered
+(`FluxAPI.attach_drop_listener`). The page therefore renders dropped rows with a
+blob-URL thumbnail and no path, and Python pushes the real paths back as a
+`flux-dropped-paths` CustomEvent (`{ detail: { files: [{ name, path, size }] } }`)
+once the drop lands, at which point the row is enriched and its preview is
+re-fetched as a data URL. Nothing about this flow can be primed from JavaScript:
+a JS-side bridge call cannot populate pywebview's drop state.
 
 ## Threading & Progress Reporting
 

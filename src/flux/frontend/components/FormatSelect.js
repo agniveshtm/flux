@@ -38,7 +38,7 @@ window.Flux.FormatSelect = {
   },
   template: `
     <select
-      class="input-select w-auto min-w-[100px]"
+      class="input-select w-auto min-w-[120px]"
       :value="targetFormat"
       @change="$emit('update:targetFormat', $event.target.value)"
       :disabled="disabled || options.length === 0"

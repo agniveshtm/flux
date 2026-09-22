@@ -28,13 +28,22 @@ window.Flux.AppFooter = {
     canConvert() {
       return this.files.length > 0 && !this.isConverting && this.files.some(f => f.status !== 'done');
     },
+    isBatchConversion() {
+      return this.files.filter(f => f.status !== 'done').length > 1;
+    },
     convertButtonText() {
       if (this.isConverting) return 'Converting...';
       if (this.files.every(f => f.status === 'done')) return 'Converted';
-      return 'Convert all';
+      return this.isBatchConversion ? 'Convert all' : 'Convert';
     },
     completedCount() {
       return this.files.filter(f => f.status === 'done').length;
+    },
+    isDevModePath() {
+      return this.outputDir && this.outputDir.startsWith('[Dev Mode]');
+    },
+    canOpenOutputDir() {
+      return this.outputDir && this.hasCompleted && !this.isDevModePath;
     },
   },
   template: `
@@ -56,7 +65,7 @@ window.Flux.AppFooter = {
           type="button"
           class="btn-ghost whitespace-nowrap"
           @click="$emit('open-output-dir')"
-          :disabled="!outputDir || !hasCompleted"
+          :disabled="!canOpenOutputDir"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
@@ -65,11 +74,14 @@ window.Flux.AppFooter = {
         </button>
       </div>
       <div class="flex items-center gap-3 flex-shrink-0">
-        <div class="flex items-center gap-2 px-3 py-2 bg-surface border border-line rounded-lg min-w-[200px] max-w-[300px]">
+        <div class="flex items-center gap-2 px-3 py-2 bg-surface border border-line rounded-lg min-w-[240px] max-w-[360px] relative">
           <svg class="w-4 h-4 text-muted flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
           </svg>
-          <span class="text-sm text-fg truncate flex-1" :title="outputDir || 'No output folder selected'">
+          <span 
+            class="text-sm text-fg truncate flex-1" 
+            :title="outputDir || 'No output folder selected'"
+          >
             {{ outputDir || 'No output folder selected' }}
           </span>
           <button
@@ -77,6 +89,7 @@ window.Flux.AppFooter = {
             class="btn-ghost p-1.5 rounded flex-shrink-0"
             @click="$emit('pick-output-dir')"
             aria-label="Select output folder"
+            title="Select output folder"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
