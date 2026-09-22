@@ -127,3 +127,86 @@ flux/
 - **Python deps**: Resolved via `uv` + `uv.lock`; PyInstaller bundles entire `.venv` site-packages
 - **Assets**: All icons, logos, fonts embedded in PyInstaller bundle
 - **ffmpeg (Phase 2)**: Static binary bundled alongside executable; no system dependency
+
+## Frontend Design Plan
+
+### Color Tokens (CSS Variables)
+
+**Light Theme** (`:root`):
+- `--color-bg: #FAFAFA`
+- `--color-surface: #FFFFFF`
+- `--color-surface-2: #F4F4F5`
+- `--color-border: #E4E4E7`
+- `--color-text: #0B0B0D`
+- `--color-muted: #52525B`
+- `--color-accent: #DC143C`
+- `--color-accent-hover: #B8102F`
+- `--color-accent-active: #970D26`
+- `--color-accent-tint: rgba(220, 20, 60, 0.12)`
+- `--color-success: #22C55E`
+
+**Dark Theme** (`.dark`):
+- `--color-bg: #0B0B0D`
+- `--color-surface: #141417`
+- `--color-surface-2: #1C1C21`
+- `--color-border: #2A2A30`
+- `--color-text: #F4F4F5`
+- `--color-muted: #A1A1AA`
+- `--color-accent: #DC143C`
+- `--color-accent-hover: #B8102F`
+- `--color-accent-active: #970D26`
+- `--color-accent-tint: rgba(220, 20, 60, 0.12)`
+- `--color-success: #22C55E`
+
+**Semantic Tailwind Classes** (mapped in tailwind.config.js):
+- `bg-surface`, `bg-surface-2`, `bg-bg`
+- `text-fg`, `text-muted`
+- `border-line`
+- `bg-accent`, `text-on-accent`
+- `focus-ring-accent`
+
+### Typography
+
+- **Font Family**: Inter (bundled locally) with system-ui fallback
+- **Base Size**: 14px (0.875rem)
+- **Scale**: 
+  - `text-xs` (12px) — metadata, file sizes
+  - `text-sm` (14px) — body, labels, buttons
+  - `text-base` (16px) — emphasized text
+  - `text-lg` (18px) — section headings
+  - `text-xl` (20px) — wordmark
+- **Weights**: 400 (regular), 500 (medium), 600 (semibold), 700 (bold)
+
+### Layout Concept
+
+- **Window**: ~900×600, resizable, min-width 640px
+- **Structure**: Single column, top-to-bottom flow
+  1. **Header** (56px): "Flux" wordmark (accent color, semibold) left; ThemeToggle + Settings icon right
+  2. **DropZone** (flex-1, min 200px): Dashed border, centered content, crimson tint on drag-over, primary "Select files" button
+  3. **FileList** (flex-1, scrollable): Table-like rows, each with filename, size, FormatSelect, status badge, ProgressBar, remove button
+  4. **Footer** (72px): "Convert all" (primary), "Open output folder" (ghost), output folder selector, "Clear completed"
+
+### State Coverage
+
+| Component | Empty | Loading | Error | Success |
+|-----------|-------|---------|-------|---------|
+| DropZone | ✓ Drop prompt | — | — | — |
+| FileList | ✓ "No files added" | — | — | ✓ "All converted" |
+| FileRow | — | ✓ Spinner in status | ✓ Crimson badge + message | ✓ Green badge + path |
+| ProgressBar | — | ✓ Animated | ✓ Crimson (error) | ✓ Green (complete) |
+| Footer | — | ✓ "Converting..." | ✓ Disabled primary | ✓ "Converted" |
+
+### Transitions & Motion
+
+- 150ms `transition-colors` for hover/focus/active states
+- 200ms `transition-opacity` for theme toggle
+- `@media (prefers-reduced-motion: reduce)` disables all animations
+- No heavy animations; only color/opacity transitions
+
+### Accessibility
+
+- AA contrast in both themes (verified: text 4.5:1, large text 3:1)
+- Visible crimson focus rings (`focus-visible: ring-2 ring-accent`)
+- Keyboard accessible: all interactive elements reachable and operable
+- ARIA labels on icon-only buttons (ThemeToggle, remove, settings)
+- Semantic HTML structure

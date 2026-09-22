@@ -27,3 +27,32 @@
 - **Decision:** Lean toward ffmpeg for Phase 2 video conversion; mark as tentative.
 - **Alternatives:** `moviepy` (Python wrapper), `imageio-ffmpeg`, `pymedia`, `gstreamer` Python bindings, cloud transcoding APIs.
 - **Why:** ffmpeg is the industry standard, supports every codec/format, static Windows builds available (~50 MB), CLI interface fits the `BaseConverter` pattern, and can be bundled as a sidecar binary. Marked tentative because Phase 2 scope, timeline, and format requirements are not finalized; `moviepy` may suffice for simpler needs.
+
+## 2026-09-19 — Frontend: Vue 3 global build + classic script tags (no bundler)
+
+- **Decision:** Use Vue 3 global production build (`vue.global.prod.js`) loaded via classic `<script>` tags, no bundler, no `.vue` files, no `<script setup>`.
+- **Alternatives:** Vite + SFC compilation, Webpack + vue-loader, esbuild, Rollup.
+- **Why:** `file://` protocol (used by pywebview) blocks ES modules (`type="module"`). Classic scripts work reliably. Global namespace (`window.Flux`) avoids module complexity. Components as plain JS objects with template strings are simple and debuggable.
+
+## 2026-09-19 — Frontend: Tailwind CSS compiled via standalone CLI (v3)
+
+- **Decision:** Compile Tailwind CSS at build time using the standalone CLI (`npx tailwindcss@3 -i ... -o ...`), commit `assets/app.css`.
+- **Alternatives:** Tailwind v4 (new CLI), PostCSS plugin, CDN.
+- **Why:** v3 standalone CLI is a single binary with no Node runtime required in packaged app. Custom theme values (colors, fonts) map to CSS variables for dynamic theming. Committed CSS works offline and from `file://`.
+
+## 2026-09-19 — Frontend: Inter font bundled locally
+
+- **Decision:** Bundle Inter variable font (TTF) locally in `assets/fonts/`, declare via `@font-face`, fallback to `system-ui`.
+- **Alternatives:** Google Fonts CDN, `@fontsource` npm package, system fonts only.
+- **Why:** Offline-first requirement forbids CDN. Variable font covers all weights (100-900) in one file (~260 KB). `system-ui` fallback matches platform UI font style.
+
+## 2026-09-19 — Frontend: Theming via CSS variables + Tailwind darkMode: 'class'
+
+- **Decision:** Define all colors as CSS variables on `:root` (light) and `.dark` (dark), mapped to semantic Tailwind classes (`bg-surface`, `text-fg`, `border-line`, `bg-accent`). Toggle `.dark` class on `<html>`.
+- **Alternatives:** Tailwind `darkMode: 'media'` only, inline styles, CSS-in-JS.
+- **Why:** CSS variables enable instant theme switching without rebuild. `darkMode: 'class'` gives programmatic control. Inline script in `index.html` applies saved theme before paint to prevent flash. Semantic class names (`bg-surface` not `bg-white`) keep components theme-agnostic.
+
+## 2026-09-19 — Frontend: Convention mode design (CloudConvert-inspired)
+
+- **Decision:** Follow convention mode (utility tool) — familiar patterns, no signature element, no unrequested aesthetic risks. Fixed palette from brief (crimson + neutrals).
+- **Why:** File converter is a tool; users need to find "Convert" without thinking. CloudConvert reference sets expectations. One name per action across flow ("Convert all" → "Converted"). Errors state what went wrong and how to fix, no apologies. Empty states guide next action.
