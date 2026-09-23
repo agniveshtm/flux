@@ -59,6 +59,7 @@ window.Flux.DropZone = {
     onDragOver(e) {
       e.preventDefault();
       e.stopPropagation();
+      if (this.isDisabled) return;
       this.$emit('dragover', e);
     },
     onDragLeave(e) {
@@ -73,6 +74,9 @@ window.Flux.DropZone = {
       // event - it is what delivers the dropped files' real paths back to
       // the app (see FluxAPI.attach_drop_listener).
       e.preventDefault();
+      // Mid-conversion drops would add "ready" rows that no job covers and
+      // stall checkAllComplete (every() never clears), so they are ignored.
+      if (this.isDisabled) return;
       const files = Array.from(e.dataTransfer.files);
       if (files.length > 0) {
         this.$emit('drop', e, files);

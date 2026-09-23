@@ -44,6 +44,25 @@ const App = {
 
     // Load supported formats on mount
     onMounted(async () => {
+      // Subscribe before any await: an early drop would otherwise fire
+      // flux-dropped-paths with no listener and permanently lose its paths.
+      // Dropped-file paths are pushed from Python after each drop
+      // (flux-dropped-paths; see FluxAPI.attach_drop_listener). Enrich any
+      // rows still missing a path.
+      onDroppedPaths((delivered) => {
+        if (!Array.isArray(delivered) || delivered.length === 0) return;
+        delivered.forEach(delivery => {
+          if (!delivery || !delivery.path) return;
+          const row = files.value.find(
+            f => !f.path && f.status === 'ready' && f.name === delivery.name
+          );
+          if (row) {
+            row.path = delivery.path;
+            if (!row.size && delivery.size) row.size = delivery.size;
+          }
+        });
+      });
+
       try {
         const formats = await getSupportedFormats();
         supportedFormats.value = formats.output || {};
@@ -65,23 +84,6 @@ const App = {
       // the mock picker stored "[Dev Mode] ..." strings which the native app
       // then reused, so every conversion failed validation with "The output
       // directory does not exist". Native flow re-prompts instead.
-      // Dropped-file paths are pushed from Python after each drop
-      // (flux-dropped-paths; see FluxAPI.attach_drop_listener). Enrich any
-      // rows still missing a path.
-      onDroppedPaths((delivered) => {
-        if (!Array.isArray(delivered) || delivered.length === 0) return;
-        delivered.forEach(delivery => {
-          if (!delivery || !delivery.path) return;
-          const row = files.value.find(
-            f => !f.path && f.status === 'ready' && f.name === delivery.name
-          );
-          if (row) {
-            row.path = delivery.path;
-            if (!row.size && delivery.size) row.size = delivery.size;
-          }
-        });
-      });
-
       // Load the saved output directory. The value is normalized rather than
       // trusted: an earlier build stored the native picker's tuple repr
       // ("('D:\\Projects',)") and the browser-dev placeholder ("[Dev Mode] ..."),
@@ -200,50 +202,66 @@ const App = {
 
       isConverting.value = true;
 
-      try {
-        // Plain {name, size, type, path} objects only - a native File object
-        // serializes through pywebview's bridge as an empty object and every
-        // path check in Python fails.
-        const fileObjects = pendingFiles.map(f => ({
-          name: f.name,
-          size: f.size || 0,
-          type: f.type || '',
-          path: f.path,
-        }));
-        const targetFormat = pendingFiles[0].targetFormat;
-        const result = await convert(fileObjects, targetFormat, { outputDir: outputDir.value });
+      // The API converts a batch to a single target format, so rows with
+      // different per-row selections are split into one job per format
+      // instead of every file inheriting the first row's choice.
+      const groups = new Map();
+      pendingFiles.forEach(f => {
+        const fmt = f.targetFormat || pendingFiles[0].targetFormat;
+        if (!groups.has(fmt)) groups.set(fmt, []);
+        groups.get(fmt).push(f);
+      });
 
-        if (result && result.jobId) {
-          startProgressPolling(result.jobId, pendingFiles.map(f => f.id));
-        } else if (result && result.details && result.details.outputDir) {
-          // The remembered output folder is gone (deleted/renamed, or an
-          // unusable value an earlier build stored): forget it so the next
-          // Convert asks for a real one, instead of failing every time.
-          forgetOutputDir();
-          const message = 'The output folder is no longer available. Choose a folder to continue.';
-          pendingFiles.forEach(f => {
+      let startedAnyJob = false;
+      for (const [targetFormat, rows] of groups) {
+        try {
+          // Plain {name, size, type, path} objects only - a native File object
+          // serializes through pywebview's bridge as an empty object and every
+          // path check in Python fails.
+          const fileObjects = rows.map(f => ({
+            name: f.name,
+            size: f.size || 0,
+            type: f.type || '',
+            path: f.path,
+          }));
+          const result = await convert(fileObjects, targetFormat, { outputDir: outputDir.value });
+
+          if (result && result.jobId) {
+            startProgressPolling(result.jobId, rows.map(f => f.id));
+            startedAnyJob = true;
+          } else if (result && result.details && result.details.outputDir) {
+            // The remembered output folder is gone (deleted/renamed, or an
+            // unusable value an earlier build stored): forget it so the next
+            // Convert asks for a real one, instead of failing every time.
+            forgetOutputDir();
+            const message = 'The output folder is no longer available. Choose a folder to continue.';
+            pendingFiles.forEach(f => {
+              f.status = 'error';
+              f.error = message;
+            });
+            console.error('Conversion failed:', message, result.details.outputDir);
+            isConverting.value = false;
+            return;
+          } else {
+            // The API rejected the request without throwing (e.g. a validation
+            // error object) - surface it and unblock the UI.
+            const message = (result && (result.message || result.error)) || 'Conversion failed';
+            rows.forEach(f => {
+              f.status = 'error';
+              f.error = message;
+            });
+            console.error('Conversion failed:', message);
+          }
+        } catch (e) {
+          console.error('Conversion failed:', e);
+          rows.forEach(f => {
             f.status = 'error';
-            f.error = message;
+            f.error = String(e);
           });
-          console.error('Conversion failed:', message, result.details.outputDir);
-          isConverting.value = false;
-        } else {
-          // The API rejected the request without throwing (e.g. a validation
-          // error object) - surface it and unblock the UI.
-          const message = (result && (result.message || result.error)) || 'Conversion failed';
-          pendingFiles.forEach(f => {
-            f.status = 'error';
-            f.error = message;
-          });
-          console.error('Conversion failed:', message);
-          isConverting.value = false;
         }
-      } catch (e) {
-        console.error('Conversion failed:', e);
-        pendingFiles.forEach(f => {
-          f.status = 'error';
-          f.error = String(e);
-        });
+      }
+
+      if (!startedAnyJob) {
         isConverting.value = false;
       }
     }

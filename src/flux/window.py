@@ -349,6 +349,10 @@ class FluxAPI:
 
         return {"opened": True}
 
+    # Cap for getFilePreview: the whole file crosses the bridge as base64, so
+    # an unbounded read lets the page exhaust memory with one huge file.
+    _MAX_PREVIEW_BYTES = 32 * 1024 * 1024
+
     # Read a file and return it as a base64 data URL for preview rendering.
     def getFilePreview(self, path: str | dict[str, Any] | None = None) -> dict[str, Any]:
         if isinstance(path, dict):
@@ -361,20 +365,33 @@ class FluxAPI:
         if not file_path.is_file():
             return self._error("VALIDATION_ERROR", "File does not exist.", {"path": path})
 
+        mime_type = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+            ".gif": "image/gif",
+            ".tif": "image/tiff",
+            ".tiff": "image/tiff",
+        }.get(file_path.suffix.lower())
+
+        # Only known image types: the page must not be able to read arbitrary
+        # local files (configs, documents, ...) through the preview bridge.
+        if mime_type is None:
+            return self._error(
+                "VALIDATION_ERROR", "Only image files can be previewed.", {"path": path}
+            )
+
         try:
             import base64
-            mime_type = {
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".png": "image/png",
-                ".webp": "image/webp",
-                ".bmp": "image/bmp",
-                ".gif": "image/gif",
-                ".tif": "image/tiff",
-                ".tiff": "image/tiff",
-            }.get(file_path.suffix.lower(), "application/octet-stream")
 
-            data = file_path.read_bytes()
+            with file_path.open("rb") as handle:
+                data = handle.read(self._MAX_PREVIEW_BYTES + 1)
+            if len(data) > self._MAX_PREVIEW_BYTES:
+                return self._error(
+                    "VALIDATION_ERROR", "File is too large to preview.", {"path": path}
+                )
             b64 = base64.b64encode(data).decode("ascii")
             data_url = f"data:{mime_type};base64,{b64}"
             return {"dataUrl": data_url}
@@ -435,9 +452,19 @@ class FluxAPI:
                 return
 
             job.output_paths = list(result.output_paths)
-            if cancelled or result.errors:
+            errors = "; ".join(result.errors)
+            if cancelled:
                 job.status = "error"
-                job.error = "; ".join(result.errors) or "Conversion cancelled"
+                job.error = errors or "Conversion cancelled"
+            elif result.output_paths:
+                # Partial success: finish as complete so the successful
+                # outputs still reach the frontend; failures stay in job.error.
+                job.status = "complete"
+                job.error = errors or None
+                job.progress = 100
+            elif result.errors:
+                job.status = "error"
+                job.error = errors
             else:
                 job.status = "complete"
                 job.error = None

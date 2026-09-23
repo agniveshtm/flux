@@ -125,16 +125,17 @@ window.Flux.useFlux = function() {
     (async () => {
       for (const file of files) {
         await delay(500 + Math.random() * 1000);
+        const job = mockJobs.get(jobId);
+        // Honour cancellation between files: a cancelled job must not be
+        // flipped back to 'complete' by the loop running to the end.
+        if (!job || job.status === 'cancelled') break;
         completed++;
         const progress = Math.round((completed / totalFiles) * 100);
-        const job = mockJobs.get(jobId);
-        if (job) {
-          job.progress = progress;
-          job.completed = completed;
-          job.outputPaths.push(`/mock/output/${file.name.replace(/\.[^.]+$/, '')}.${targetFormat}`);
-          if (completed === totalFiles) {
-            job.status = 'complete';
-          }
+        job.progress = progress;
+        job.completed = completed;
+        job.outputPaths.push(`/mock/output/${file.name.replace(/\.[^.]+$/, '')}.${targetFormat}`);
+        if (completed === totalFiles) {
+          job.status = 'complete';
         }
       }
     })();

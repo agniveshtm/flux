@@ -33,7 +33,7 @@ window.Flux.AppFooter = {
     },
     convertButtonText() {
       if (this.isConverting) return 'Converting...';
-      if (this.files.every(f => f.status === 'done')) return 'Converted';
+      if (this.files.length > 0 && this.files.every(f => f.status === 'done')) return 'Converted';
       return this.isBatchConversion ? 'Convert all' : 'Convert';
     },
     completedCount() {

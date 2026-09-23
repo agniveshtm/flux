@@ -25,9 +25,13 @@ window.Flux.useTheme = function() {
 
   applyTheme(theme.value);
 
+  // Once the user explicitly picks a theme, stop following OS changes
+  let hasUserPreference = localStorage.getItem(STORAGE_KEY) !== null;
+
   function toggleTheme() {
     theme.value = theme.value === 'dark' ? 'light' : 'dark';
     localStorage.setItem(STORAGE_KEY, theme.value);
+    hasUserPreference = true;
     applyTheme(theme.value);
   }
 
@@ -35,12 +39,12 @@ window.Flux.useTheme = function() {
     if (t === 'light' || t === 'dark') {
       theme.value = t;
       localStorage.setItem(STORAGE_KEY, t);
+      hasUserPreference = true;
       applyTheme(t);
     }
   }
 
   // Listen for OS theme changes (only if user hasn't set a preference)
-  let hasUserPreference = localStorage.getItem(STORAGE_KEY) !== null;
   const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
   const handleChange = (e) => {
     if (!hasUserPreference) {

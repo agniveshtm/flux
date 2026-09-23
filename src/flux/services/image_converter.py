@@ -60,7 +60,7 @@ class PillowImageConverter(BaseConverter):
                 stem = source.stem
                 output_name = f"{stem}.{target}"
                 counter = 1
-                while output_name in used_names:
+                while output_name in used_names or (output_directory / output_name).exists():
                     output_name = f"{stem}-{counter}.{target}"
                     counter += 1
                 used_names.add(output_name)

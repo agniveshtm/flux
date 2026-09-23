@@ -9,6 +9,9 @@ module.exports = {
   darkMode: 'class',
   theme: {
     extend: {
+      spacing: {
+        '18': '4.5rem',
+      },
       colors: {
         bg: 'var(--color-bg)',
         surface: 'var(--color-surface)',

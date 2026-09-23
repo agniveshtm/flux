@@ -130,7 +130,8 @@ flux/
 │       ├── main.py                 # pywebview entry point
 │       ├── window.py               # API exposure + JS bridge
 │       ├── converter.py            # BaseConverter ABC + registry
-│       ├── image_converter.py      # PillowImageConverter
+│       ├── services/
+│       │   └── image_converter.py  # PillowImageConverter
 │       ├── assets/                 # favicons, logos
 │       └── frontend/               # Vue 3 + Tailwind (vendored)
 │           ├── index.html
