@@ -1,0 +1,181 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg: #FAFAFA;
+  --color-surface: #FFFFFF;
+  --color-surface-2: #F4F4F5;
+  --color-border: #E4E4E7;
+  --color-text: #0B0B0D;
+  --color-muted: #52525B;
+  --color-accent: #DC143C;
+  --color-accent-hover: #B8102F;
+  --color-accent-active: #970D26;
+  --color-accent-tint: rgba(220, 20, 60, 0.12);
+  --color-success: #22C55E;
+}
+
+.dark {
+  --color-bg: #0B0B0D;
+  --color-surface: #141417;
+  --color-surface-2: #1C1C21;
+  --color-border: #2A2A30;
+  --color-text: #F4F4F5;
+  --color-muted: #A1A1AA;
+  --color-accent: #DC143C;
+  --color-accent-hover: #B8102F;
+  --color-accent-active: #970D26;
+  --color-accent-tint: rgba(220, 20, 60, 0.12);
+  --color-success: #22C55E;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('./fonts/Inter-Variable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+  font-style: normal;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.5;
+  margin: 0;
+  min-height: 100vh;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-accent);
+  border-radius: 0.375rem;
+}
+
+::selection {
+  background-color: var(--color-accent-tint);
+  color: var(--color-accent);
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-muted);
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent text-on-accent hover:bg-accent-hover active:bg-accent-active;
+  }
+
+  .btn-ghost {
+    @apply btn bg-transparent text-fg hover:bg-surface-2 active:bg-surface-2;
+  }
+
+  .btn-danger {
+    @apply btn bg-transparent text-accent hover:bg-accent-tint active:bg-accent-tint;
+  }
+
+  .input-select {
+    @apply w-full px-3 py-2 text-sm bg-surface rounded-lg text-fg placeholder-muted focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent transition-colors duration-150;
+    border-color: var(--color-border);
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-ready {
+    @apply badge bg-surface-2 text-muted;
+    border: 1px solid var(--color-border);
+  }
+
+  .badge-converting {
+    @apply badge bg-accent-tint text-accent;
+  }
+
+  .badge-done {
+    @apply badge bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400;
+  }
+
+  .badge-error {
+    @apply badge bg-accent-tint text-accent;
+  }
+
+  .card {
+    @apply bg-surface rounded-lg;
+    border: 1px solid var(--color-border);
+  }
+
+  .drop-zone {
+    @apply relative border-2 border-dashed rounded-lg transition-colors duration-150;
+    border-color: var(--color-border);
+  }
+
+  .drop-zone.active {
+    @apply bg-accent-tint;
+    border-color: var(--color-accent);
+  }
+
+  .progress-bar {
+    @apply h-2 bg-surface-2 rounded-full overflow-hidden;
+  }
+
+  .progress-bar-fill {
+    @apply h-full bg-accent transition-all duration-150 ease-out;
+  }
+
+  .progress-bar-fill.success {
+    @apply bg-success;
+  }
+
+  .progress-bar-fill.error {
+    @apply bg-accent;
+  }
+}

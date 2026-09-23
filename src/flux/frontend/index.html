@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flux - Image Converter</title>
+  <link rel="preload" href="./assets/app.css" as="style">
+  <link rel="stylesheet" href="./assets/app.css">
+  <!-- Inline theme script to prevent flash of wrong theme -->
+  <script>
+    (function() {
+      var STORAGE_KEY = 'flux-theme';
+      var stored = localStorage.getItem(STORAGE_KEY);
+      var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var theme = (stored === 'light' || stored === 'dark') ? stored : (prefersDark ? 'dark' : 'light');
+      if (theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  
+  <!-- Vendor scripts (load first) -->
+  <script src="./vendor/vue.global.prod.js"></script>
+  
+  <!-- Composables -->
+  <script src="./composables/useTheme.js"></script>
+  <script src="./composables/useFlux.js"></script>
+  
+  <!-- Components -->
+  <script src="./components/ThemeToggle.js"></script>
+  <script src="./components/AppHeader.js"></script>
+  <script src="./components/Branding.js"></script>
+  <script src="./components/DropZone.js"></script>
+  <script src="./components/ProgressBar.js"></script>
+  <script src="./components/FormatSelect.js"></script>
+  <script src="./components/FileRow.js"></script>
+  <script src="./components/FileList.js"></script>
+  <script src="./components/AppFooter.js"></script>
+  
+  <!-- Main app -->
+  <script src="./main.js"></script>
+</body>
+</html>
