@@ -179,3 +179,178 @@ body {
     @apply bg-accent;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Preview modal (FileRow fullscreen preview)                         */
+/* Plain CSS on purpose: no utilities involved, so it passes through   */
+/* the Tailwind build untouched. Lives here (input.css) rather than in */
+/* app.css so a rebuild carries it over instead of wiping it.          */
+/* ------------------------------------------------------------------ */
+
+.preview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  /* Signature detail: a barely-there alpha checkerboard behind the image,
+     echoing what the converter itself has to flatten when writing JPGs. */
+  background-image:
+    linear-gradient(45deg, rgba(0, 0, 0, 0.85) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(0, 0, 0, 0.85) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(0, 0, 0, 0.85) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(0, 0, 0, 0.85) 75%);
+  background-size: 24px 24px;
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+  background-color: #050506;
+  animation: preview-modal-in 160ms ease-out;
+}
+
+.preview-modal-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 9999px;
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+
+.preview-modal-close:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.preview-modal-close:active {
+  transform: scale(0.96);
+}
+
+.preview-modal-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+
+.preview-modal-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.preview-modal-image {
+  max-width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: 0.75rem;
+  background-color: var(--color-surface);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.preview-modal-empty {
+  color: var(--color-muted);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  padding: 2rem 2.5rem;
+  text-align: center;
+}
+
+.preview-modal-caption {
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(244, 244, 245, 0.85);
+  font-size: 0.8125rem;
+}
+
+@keyframes preview-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.preview-thumb-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-accent);
+  font-size: 1rem;
+  font-weight: 600;
+  user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-modal {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Update bell (UpdateBell)                                           */
+/* Tiny yellow round with an "!" at the top-right of the bell button.  */
+/* Yellow reads as "attention" in both themes; the surface-colored ring */
+/* keeps it legible against the icon underneath.                       */
+/* ------------------------------------------------------------------ */
+
+.update-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background-color: #facc15;
+  color: #422006;
+  border: 2px solid var(--color-surface);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* "Mark all as read" chip in the update card header: a quiet secondary
+   action that must not compete with the primary buttons below. */
+.update-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface-2);
+  color: var(--color-text);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+
+.update-pill:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}

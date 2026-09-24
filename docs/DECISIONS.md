@@ -56,3 +56,15 @@
 
 - **Decision:** Follow convention mode (utility tool) — familiar patterns, no signature element, no unrequested aesthetic risks. Fixed palette from brief (crimson + neutrals).
 - **Why:** File converter is a tool; users need to find "Convert" without thinking. CloudConvert reference sets expectations. One name per action across flow ("Convert all" → "Converted"). Errors state what went wrong and how to fix, no apologies. Empty states guide next action.
+
+## 2026-09-24 — Release pipeline: PyInstaller one-file + Inno Setup, tag-driven CI
+
+- **Decision:** Ship every `v*` tag through `.github/workflows/release.yml`: pytest gate, tag↔pyproject↔`flux.__version__` version check, PyInstaller one-file `dist/flux.exe` (windowed, smoke-tested via `--version`), Inno Setup `dist/flux-setup-<ver>.exe` from `installer/flux.iss`, both uploaded to the GitHub release. No wheel/sdist artifacts.
+- **Alternatives:** onedir bundle (faster start, folder to ship), `cx_Freeze`/`Nuitka`, publishing only the exe or only the installer, keeping `uv build` outputs in the release.
+- **Why:** The release needs both artifacts for a reason: `flux.exe` is the portable download, `flux-setup-<ver>.exe` is what the in-app updater can actually run to replace an installation (and what the `.iss` relaunches after upgrade). One-file keeps the portable download a single file; `console=False` keeps users from seeing a terminal. The smoke test uses `--version` because a GUI exe would hang CI otherwise. Version is asserted in three places (tag, pyproject, `__version__`) because the updater compares `__version__` against release tags — a mismatch would break update detection for everyone already installed.
+
+## 2026-09-24 — In-app updates: GitHub releases via stdlib, bell UI, explicit restart
+
+- **Decision:** Check GitHub `/releases/latest` at startup with stdlib `urllib` (`flux/services/updater.py`), surface newer releases through a bell button in the header with a yellow "!" badge, and offer Download update / Dismiss / Mark as read. The downloaded artifact is always the Inno setup; applying it requires an explicit **Restart & update**, which runs the setup `/SILENT` and closes the app.
+- **Alternatives:** `requests`/`httpx` for networking, a full auto-updater framework (e.g. `pyupdater`, `tufup`), silent auto-install the moment the download completes, checking on a timer instead of at startup, ignoring the badge state in `localStorage`.
+- **Why:** The offline-first dependency policy rules out a networking client for one GET; `urllib` ships with Python. Auto-installing the moment bytes land would kill in-flight conversions — the industry-standard explicit restart step keeps the user in control while `/SILENT` + `PrivilegesRequired=lowest` makes the actual upgrade (and relaunch, via the `.iss` `[Run]` entries) unattended and UAC-free. Dismiss is session-only and Mark as read persists (`flux-seen-release`), so "later" and "never for this version" stay distinct. Download goes to the temp dir as `.part`-then-rename so a truncated file can never be executed as an installer.

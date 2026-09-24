@@ -39,6 +39,9 @@ flowchart LR
 | `pickOutputDir` | — | `{ path: string }` | `CANCELLED` |
 | `openOutputDir` | `{ path: string }` | `{ opened: boolean }` | `VALIDATION_ERROR`, `OPEN_ERROR` |
 | `getFilePreview` | `{ path: string }` | `{ dataUrl: string }` | `VALIDATION_ERROR` |
+| `checkForUpdate` | — | `{ available, currentVersion, latestVersion, notes, publishedAt, assetName, assetSize }` | `NETWORK_ERROR`, `NO_RELEASES`, `BAD_RESPONSE` |
+| `downloadUpdate` | — | `{ started: boolean }` | `NO_UPDATE` |
+| `installUpdate` | — | `{ installing: boolean }` | `NOT_DOWNLOADED`, `INSTALL_ERROR` |
 
 **Error shape**: `{ code: string, message: string, details?: object }`
 
@@ -68,6 +71,32 @@ blob-URL thumbnail and no path, and Python pushes the real paths back as a
 once the drop lands, at which point the row is enriched and its preview is
 re-fetched as a data URL. Nothing about this flow can be primed from JavaScript:
 a JS-side bridge call cannot populate pywebview's drop state.
+
+### In-app updates
+
+The header's bell button (`UpdateBell`) surfaces newer GitHub releases: a
+tiny yellow "!" badge appears when `checkForUpdate` (run once at startup,
+after the bridge is ready) reports a release newer than `flux.__version__`,
+and the popover offers **Download update**, **Dismiss** (session-only) and
+**Mark as read** (persists the seen version in `localStorage` under
+`flux-seen-release`). The only runtime network calls the app makes are this
+check and the user-initiated download.
+
+Every release (built by `.github/workflows/release.yml` on each `v*` tag)
+carries two Windows artifacts: the portable `flux.exe` and the Inno Setup
+installer `flux-setup-<ver>.exe`. The updater downloads the **installer** -
+`pick_setup_asset` refuses to fall back to the portable exe - into the OS
+temp dir (`flux-update/`), streamed in chunks to a `.part` file that is
+renamed only when complete. Python pushes `flux-update-progress`
+CustomEvents (`{ phase: 'downloading' | 'downloaded' | 'error', progress,
+received?, total?, message? }`) exactly like `flux-progress`.
+
+Applying an update is an explicit **Restart & update** action:
+`installUpdate` launches the downloaded setup with `/SILENT` (per-user
+install, `PrivilegesRequired=lowest`, so no UAC prompt) and then destroys
+the window. The setup replaces the app's files and relaunches it (see the
+`[Run]` entries in `installer/flux.iss`), completing the upgrade to whatever
+version the release carried.
 
 ## Threading & Progress Reporting
 
@@ -124,14 +153,20 @@ flux/
 │   ├── timeline.md
 │   ├── ARCHITECTURE.md
 │   └── DECISIONS.md
+├── .github/
+│   └── workflows/
+│       └── release.yml           # tag-driven release pipeline
+├── installer/
+│   └── flux.iss                  # Inno Setup script (dist/flux.exe → setup)
 ├── src/
 │   └── flux/
-│       ├── __init__.py
-│       ├── main.py                 # pywebview entry point
-│       ├── window.py               # API exposure + JS bridge
-│       ├── converter.py            # BaseConverter ABC + registry
+│       ├── __init__.py           # __version__ (runtime version source)
+│       ├── main.py               # pywebview entry point + --version/--help
+│       ├── window.py             # API exposure + JS bridge
+│       ├── converter.py          # BaseConverter ABC + registry
 │       ├── services/
-│       │   └── image_converter.py  # PillowImageConverter
+│       │   ├── image_converter.py  # PillowImageConverter
+│       │   └── updater.py         # GitHub release check + installer download
 │       ├── assets/                 # favicons, logos
 │       └── frontend/               # Vue 3 + Tailwind (vendored)
 │           ├── index.html
@@ -142,6 +177,8 @@ flux/
 │           │   ├── composables/
 │           │   └── styles/
 │           └── dist/               # built output (committed)
+├── tests/                        # pytest suite (version + updater)
+├── flux.spec                     # PyInstaller spec (dist/flux.exe)
 ├── pyproject.toml
 ├── uv.lock
 ├── .python-version

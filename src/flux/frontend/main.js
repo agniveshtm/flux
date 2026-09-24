@@ -17,6 +17,7 @@ const components = {
   FormatSelect: window.Flux.FormatSelect,
   ProgressBar: window.Flux.ProgressBar,
   ThemeToggle: window.Flux.ThemeToggle,
+  UpdateBell: window.Flux.UpdateBell,
   AppFooter: window.Flux.AppFooter,
 };
 
@@ -32,7 +33,7 @@ const App = {
   components,
   setup() {
     const { theme, toggleTheme, cleanup: cleanupTheme } = window.Flux.useTheme();
-    const { convert, getProgress, getSupportedFormats, pickFiles, pickOutputDir, openOutputDir, onDroppedPaths, getFilePreview, isNative, normalizeDirPath } = window.Flux.useFlux();
+    const { convert, getProgress, getSupportedFormats, pickFiles, pickOutputDir, openOutputDir, onDroppedPaths, getFilePreview, isNative, normalizeDirPath, checkForUpdate, downloadUpdate, installUpdate, onUpdateProgress } = window.Flux.useFlux();
 
     const files = ref([]);
     const supportedFormats = ref({});
@@ -41,6 +42,119 @@ const App = {
     const isConverting = ref(false);
     const activeJobs = ref(new Map());
     const progressTimers = ref(new Map());
+
+    // --- In-app update state -----------------------------------------------
+    // updateState: checking | idle | downloading | downloaded | installing | error
+    const updateInfo = ref(null);
+    const updateState = ref('checking');
+    const updateProgress = ref(0);
+    const updateReceived = ref(0);
+    const updateTotal = ref(0);
+    const updateError = ref('');
+    const updateCheckError = ref('');
+    const updateDismissed = ref(false); // session-only "Dismiss"
+    const seenRelease = ref(localStorage.getItem('flux-seen-release') || '');
+
+    // Badge rule: only a newer, not-yet-acknowledged, not-yet-acted-on
+    // release gets the yellow exclamation. Downloading/dismissing/marking it
+    // read all clear it - the bell itself stays clickable either way.
+    const showUpdateBadge = computed(() => {
+      const info = updateInfo.value;
+      if (!info || !info.available) return false;
+      if (updateDismissed.value) return false;
+      if (seenRelease.value && seenRelease.value === info.latestVersion) return false;
+      return updateState.value === 'idle' || updateState.value === 'checking';
+    });
+
+    function handleUpdateProgress(detail) {
+      if (detail.phase === 'downloading') {
+        updateState.value = 'downloading';
+        updateProgress.value = detail.progress || 0;
+        updateReceived.value = detail.received || 0;
+        updateTotal.value = detail.total || 0;
+      } else if (detail.phase === 'downloaded') {
+        updateState.value = 'downloaded';
+        updateProgress.value = 100;
+      } else if (detail.phase === 'error') {
+        updateState.value = 'error';
+        updateError.value = detail.message || 'The update download failed.';
+      }
+    }
+
+    async function handleUpdateCheck() {
+      updateState.value = 'checking';
+      updateCheckError.value = '';
+      try {
+        const info = await checkForUpdate();
+        if (info && !info.code) {
+          updateInfo.value = info;
+        } else {
+          // A failed check is not worth disturbing anyone: the menu shows a
+          // quiet "could not check" with a retry, and no badge ever appears.
+          updateCheckError.value = (info && info.message) || 'Could not check for updates.';
+        }
+      } catch (e) {
+        console.warn('Update check failed:', e);
+        updateCheckError.value = 'Could not check for updates.';
+      }
+      updateState.value = 'idle';
+    }
+
+    async function handleUpdateDownload() {
+      if (updateState.value === 'downloading') return;
+      updateError.value = '';
+      updateProgress.value = 0;
+      updateReceived.value = 0;
+      updateTotal.value = 0;
+      // Optimistic: Python confirms with flux-update-progress events, or an
+      // immediate error object (NO_UPDATE) if the state is stale.
+      updateState.value = 'downloading';
+      try {
+        const result = await downloadUpdate();
+        if (!result || result.code) {
+          updateState.value = 'error';
+          updateError.value = (result && result.message) || 'Could not start the download.';
+        }
+      } catch (e) {
+        console.warn('Update download failed to start:', e);
+        updateState.value = 'error';
+        updateError.value = 'Could not start the download.';
+      }
+    }
+
+    async function handleUpdateInstall() {
+      if (updateState.value === 'installing') return;
+      updateError.value = '';
+      updateState.value = 'installing';
+      try {
+        const result = await installUpdate();
+        if (!result || result.code) {
+          // Nothing has started yet, so fall back to the ready state and
+          // let the user retry instead of stranding them on "Restarting...".
+          updateState.value = 'downloaded';
+          updateError.value = (result && result.message) || 'Could not start the installer.';
+        }
+        // Success: Python runs the setup and closes this window.
+      } catch (e) {
+        console.warn('Update install failed to start:', e);
+        updateState.value = 'downloaded';
+        updateError.value = 'Could not start the installer.';
+      }
+    }
+
+    function handleUpdateDismiss() {
+      // Session only - the badge returns on the next launch unless the user
+      // marks the release read or actually updates.
+      updateDismissed.value = true;
+    }
+
+    function handleUpdateMarkRead() {
+      if (updateInfo.value) {
+        seenRelease.value = updateInfo.value.latestVersion;
+        localStorage.setItem('flux-seen-release', seenRelease.value);
+      }
+      updateDismissed.value = true;
+    }
 
     // Load supported formats on mount
     onMounted(async () => {
@@ -62,6 +176,12 @@ const App = {
           }
         });
       });
+
+      // Update check runs once per start; progress is subscribed first so a
+      // fast download cannot outrun its listener. Deliberately not awaited:
+      // it waits on the native bridge and must not delay format loading.
+      onUpdateProgress(handleUpdateProgress);
+      handleUpdateCheck();
 
       try {
         const formats = await getSupportedFormats();
@@ -437,13 +557,40 @@ const App = {
       handleDrop,
       handleDragOver,
       handleDragLeave,
+      updateInfo,
+      updateState,
+      updateProgress,
+      updateReceived,
+      updateTotal,
+      updateError,
+      updateCheckError,
+      showUpdateBadge,
+      handleUpdateCheck,
+      handleUpdateDownload,
+      handleUpdateInstall,
+      handleUpdateDismiss,
+      handleUpdateMarkRead,
     };
   },
   template: `
     <div class="flex flex-col h-screen bg-bg text-fg">
       <AppHeader
         :theme="theme"
+        :update="updateInfo"
+        :update-badge="showUpdateBadge"
+        :update-state="updateState"
+        :update-progress="updateProgress"
+        :update-received="updateReceived"
+        :update-total="updateTotal"
+        :update-error="updateError"
+        :update-check-error="updateCheckError"
+        :is-native="isNative"
         @toggle-theme="toggleTheme"
+        @update-check="handleUpdateCheck"
+        @update-download="handleUpdateDownload"
+        @update-install="handleUpdateInstall"
+        @update-dismiss="handleUpdateDismiss"
+        @update-mark-read="handleUpdateMarkRead"
       />
       <main class="flex-1 flex flex-col overflow-hidden px-4 py-4 gap-4 min-h-0 w-full">
         <Branding :theme="theme" />

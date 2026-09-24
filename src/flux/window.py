@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 import webview
 from webview.dom import DOMEventHandler
 
+from flux import __version__
 from flux.converter import (
     BaseConverter,
     ConverterRegistry,
@@ -20,7 +22,7 @@ from flux.converter import (
     UnsupportedFormatError,
     normalize_format,
 )
-from flux.services import PillowImageConverter
+from flux.services import PillowImageConverter, UpdateError, UpdateInfo, Updater
 
 
 @dataclass
@@ -72,6 +74,17 @@ class FluxAPI:
         self._window = window
         self._jobs: dict[str, _Job] = {}
         self._lock = threading.RLock()
+
+        # In-app update state (see the checkForUpdate/downloadUpdate/
+        # installUpdate methods below). _download_lock is held for the whole
+        # download so a double-clicked "Download update" starts one stream,
+        # and _downloaded_setup remembers the installer path to hand to
+        # installUpdate.
+        self._updater = Updater(current_version=__version__)
+        self._update_info: UpdateInfo | None = None
+        self._downloaded_setup: Path | None = None
+        self._download_lock = threading.Lock()
+        self._update_last_emit = 0.0
 
     @staticmethod
     def _default_registry() -> ConverterRegistry:
@@ -397,6 +410,147 @@ class FluxAPI:
             return {"dataUrl": data_url}
         except Exception as exc:
             return self._error("READ_ERROR", str(exc), {"path": path})
+
+    # ------------------------------------------------------------------
+    # In-app updates
+    #
+    # The bell button in the header drives three bridge calls. All network
+    # work happens on Python threads; progress and terminal states are
+    # pushed back as `flux-update-progress` CustomEvents (same pattern as
+    # `flux-progress`), because the download outlives any single call.
+    # ------------------------------------------------------------------
+
+    # Wall-clock minimum between download-progress events: evaluate_js
+    # blocks for a round-trip per call, so per-chunk events are coalesced.
+    _UPDATE_EMIT_INTERVAL = 0.15
+
+    def checkForUpdate(self) -> dict[str, Any]:
+        """Check GitHub for a newer release than the running build.
+
+        Returns the UpdateInfo payload (always containing currentVersion so
+        the frontend can render an up-to-date state), or an error object for
+        network failures - which the frontend treats as "no news" rather than
+        something to bother the user about.
+        """
+        try:
+            info = self._updater.check()
+        except UpdateError as exc:
+            return self._error(exc.code, exc.message)
+        self._update_info = info
+        return info.to_dict()
+
+    def downloadUpdate(self) -> dict[str, Any]:
+        """Start streaming the release installer; progress arrives via events.
+
+        A second call while a download is running reports `started: true`
+        instead of failing, so a double-click cannot wedge the UI into an
+        error state for an action that is already underway.
+        """
+        info = self._update_info
+        if info is None or not info.available:
+            return self._error("NO_UPDATE", "No update is available.")
+        if not self._download_lock.acquire(blocking=False):
+            return {"started": True}
+
+        threading.Thread(target=self._run_download, args=(info,), daemon=True).start()
+        return {"started": True}
+
+    def _run_download(self, info: UpdateInfo) -> None:
+        try:
+            path = self._updater.download(info, progress_cb=self._download_progress)
+        except UpdateError as exc:
+            self._emit_update_progress(
+                {"phase": "error", "progress": 0, "code": exc.code, "message": exc.message}
+            )
+        except Exception as exc:  # defensive: never leave the UI hanging
+            self._emit_update_progress(
+                {
+                    "phase": "error",
+                    "progress": 0,
+                    "code": "UNKNOWN",
+                    "message": str(exc) or exc.__class__.__name__,
+                }
+            )
+        else:
+            self._downloaded_setup = path
+            self._emit_update_progress({"phase": "downloaded", "progress": 100})
+        finally:
+            self._download_lock.release()
+
+    def _download_progress(self, received: int, total: int) -> None:
+        now = time.monotonic()
+        if now - self._update_last_emit < self._UPDATE_EMIT_INTERVAL:
+            return
+        self._update_last_emit = now
+        percentage = round((received / total) * 100) if total else 0
+        self._emit_update_progress(
+            {
+                "phase": "downloading",
+                "progress": max(0, min(100, percentage)),
+                "received": received,
+                "total": total,
+            }
+        )
+
+    def _emit_update_progress(self, detail: dict[str, Any]) -> None:
+        window = self._window
+        if window is None:
+            return
+        script = (
+            "window.dispatchEvent(new CustomEvent('flux-update-progress', "
+            f"{{detail: {json.dumps(detail)}}}))"
+        )
+        try:
+            window.evaluate_js(script)
+        except Exception:
+            return
+
+    def installUpdate(self) -> dict[str, Any]:
+        """Run the downloaded installer and close the app.
+
+        The installer replaces the very files this process is executing
+        from, so the sequence is: start the setup unattended (/SILENT - the
+        script installs per-user with PrivilegesRequired=lowest, so there is
+        no UAC prompt), then leave. Launching *before* the teardown matters:
+        a timer scheduled at exit would be killed with the interpreter, and
+        a launch strictly after exit would need a helper process. If Setup
+        still finds locked files it closes them itself - silent mode never
+        prompts - and relaunching after the upgrade is configured in the
+        .iss script.
+        """
+        setup_path = self._downloaded_setup
+        if setup_path is None or not Path(setup_path).is_file():
+            return self._error("NOT_DOWNLOADED", "Download the update before installing it.")
+
+        args = [str(setup_path)]
+        kwargs: dict[str, Any] = {}
+        if sys.platform.startswith("win"):
+            args.append("/SILENT")
+            kwargs["creationflags"] = (
+                subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+        try:
+            subprocess.Popen(args, **kwargs)
+        except OSError as exc:
+            return self._error("INSTALL_ERROR", str(exc))
+
+        # Give the bridge response a moment to reach the page before the
+        # window (and with it the JS context) goes away.
+        threading.Thread(target=self._destroy_window_for_update, daemon=True).start()
+        return {"installing": True}
+
+    def _destroy_window_for_update(self) -> None:
+        time.sleep(0.4)
+        window = self._window
+        if window is None:
+            os._exit(0)
+        try:
+            window.destroy()
+        except Exception:
+            # Nothing left to run; a hard exit still lets the already-started
+            # installer finish the upgrade instead of hanging on a wedged
+            # teardown.
+            os._exit(0)
 
     def _run_job(
         self,
