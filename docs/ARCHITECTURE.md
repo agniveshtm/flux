@@ -155,6 +155,7 @@ flux/
 │   └── DECISIONS.md
 ├── .github/
 │   └── workflows/
+│       ├── test.yml              # CI: pytest, frontend, CSS, installer checks
 │       └── release.yml           # tag-driven release pipeline
 ├── installer/
 │   └── flux.iss                  # Inno Setup script (dist/flux.exe → setup)
@@ -177,6 +178,8 @@ flux/
 │           │   ├── composables/
 │           │   └── styles/
 │           └── dist/               # built output (committed)
+├── scripts/
+│   └── check-frontend.js         # node syntax/template/index checks (no deps)
 ├── tests/                        # pytest suite (version + updater)
 ├── flux.spec                     # PyInstaller spec (dist/flux.exe)
 ├── pyproject.toml
