@@ -36,6 +36,6 @@ Flux is a desktop file converter application for general consumers. It provides 
 - App launches in under 2 seconds on typical Windows hardware
 - Image conversions complete successfully for all supported format pairs
 - Installer size stays under 100 MB
-- Zero external network calls at runtime
+- Zero external network calls at runtime, except the user-visible in-app update check/download (GitHub releases)
 - Light/dark theme toggle persists across sessions
 - No UI freezing during conversions (progress reported via frontend)

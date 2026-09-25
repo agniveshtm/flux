@@ -1,0 +1,83 @@
+name: test
+
+on:
+  push:
+    branches:
+      - main
+      - feature
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: pytest (${{ matrix.os }})
+    strategy:
+      # Report both platforms even when one fails - a Windows-only break
+      # must not mask the Linux result (or the other way round).
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+      - run: uv python install 3.12
+      - run: uv sync
+      - run: uv run pytest tests/
+      - name: Validate PyInstaller spec syntax
+        run: uv run python -c "compile(open('flux.spec', encoding='utf-8').read(), 'flux.spec', 'exec')"
+
+  frontend:
+    name: frontend checks (node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Syntax-checks every script with node --check, compiles every
+      # component template with the vendored Vue build, and verifies the
+      # index.html script tags match the files on disk. No dependencies:
+      # the runner's Node is enough.
+      - run: node scripts/check-frontend.js
+
+  css:
+    name: CSS is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild Tailwind CSS (pinned to the committed version)
+        working-directory: src/flux/frontend
+        run: npx --yes tailwindcss@3.4.19 -i ./assets/input.css -o ./assets/app.css
+      # app.css is committed and served from file://; if a rebuild changes
+      # it, the committed copy is stale (or a class in a new component was
+      # never compiled in).
+      - name: Fail when the committed app.css is stale
+        run: git diff --exit-code -- src/flux/frontend/assets/app.css
+
+  installer:
+    name: installer script (Inno Setup)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The .iss only needs dist\flux.exe to exist in order to compile - the
+      # real exe is built by the release workflow. A placeholder keeps this
+      # check fast while still validating the whole script end to end
+      # (directives, [Files]/[Icons]/[Run] entries, artifact naming).
+      - name: Compile installer/flux.iss
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Set-Content -Path dist\flux.exe -Value 'placeholder' -NoNewline
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found" }
+          & $iscc "/DMyAppVersion=0.0.0" "installer\flux.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path "dist\flux-setup-0.0.0.exe")) { throw "setup artifact was not produced" }

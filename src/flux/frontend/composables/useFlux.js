@@ -24,6 +24,12 @@ const bridgeReady = new Promise((resolve) => {
   window.setTimeout(() => resolve(hasBridge()), 3000);
 });
 
+// The timeout above is a deadline for *reporting* browser mode, not a verdict on
+// the bridge: a native app whose bridge lands late (slow startup) must still be
+// able to check for and install updates, so callers ask whether a bridge is
+// usable now instead of trusting the resolved value alone.
+const bridgeUsable = () => bridgeReady.then((ready) => ready || hasBridge());
+
 // Normalizes a directory path that came from the native folder picker or from
 // localStorage. pywebview's WinForms backend returns the selection as a tuple,
 // and an earlier build stringified it, so a stored value could be tuple repr
@@ -52,11 +58,16 @@ const normalizeDirPath = (value) => {
 window.Flux.useFlux = function() {
   // Reactive flag so the UI can reflect the real mode once the bridge lands.
   const isNative = Vue.ref(hasBridge());
-  bridgeReady.then((ready) => {
-    if (ready) {
+  const markNativeIfReady = () => {
+    if (hasBridge()) {
       isNative.value = true;
     }
-  });
+  };
+  bridgeReady.then(markNativeIfReady);
+  // A bridge that arrives *after* the readiness timeout still counts as native,
+  // so the card never claims "Update checks run in the desktop app" while the
+  // update calls below are in fact reaching the bridge.
+  window.addEventListener('pywebviewready', markNativeIfReady);
 
   // Mock delay helper
   const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -283,6 +294,37 @@ window.Flux.useFlux = function() {
     return { code: 'DEV_MODE', message: 'Preview only works in native app' };
   }
 
+  // --- In-app update API --------------------------------------------------
+  // These wait for bridgeReady before touching the bridge, unlike the
+  // conversion calls: they run at startup, regularly *before*
+  // window.pywebview.api has been injected, and hasBridge() would then read
+  // as "browser mode" for a native app that is merely not ready yet. In a
+  // plain browser they resolve to null, which App renders as "no update".
+  async function checkForUpdate() {
+    if (!(await bridgeUsable())) return null;
+    return callApi('checkForUpdate', []);
+  }
+
+  async function downloadUpdate() {
+    if (!(await bridgeUsable())) return null;
+    return callApi('downloadUpdate', []);
+  }
+
+  async function installUpdate() {
+    if (!(await bridgeUsable())) return null;
+    return callApi('installUpdate', []);
+  }
+
+  // Progress and terminal phases pushed from Python as flux-update-progress
+  // CustomEvents ({phase: 'downloading'|'downloaded'|'error', ...}). The
+  // subscription lives for the page lifetime - one download per launch, and
+  // the listener must exist before downloadUpdate() is ever called.
+  function onUpdateProgress(handler) {
+    window.addEventListener('flux-update-progress', (e) => {
+      handler(e.detail && typeof e.detail === 'object' ? e.detail : {});
+    });
+  }
+
   return {
     convert,
     getProgress,
@@ -295,5 +337,9 @@ window.Flux.useFlux = function() {
     getFilePreview,
     isNative,
     normalizeDirPath,
+    checkForUpdate,
+    downloadUpdate,
+    installUpdate,
+    onUpdateProgress,
   };
 };
