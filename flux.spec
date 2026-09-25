@@ -25,11 +25,14 @@ a = Analysis(
     pathex=["src"],
     binaries=[],
     datas=[
-        # Runtime static files. The code resolves them as
-        # Path(__file__).parent / "frontend" (and "assets"); PyInstaller
-        # reports compiled modules' __file__ bundle-relative, so the
-        # destination must be "flux/..." for those paths to line up inside
-        # the bundle.
+        # Runtime static files, looked up through flux.main._bundled_path().
+        # Modules imported from the bundle get __file__ = <_MEIPASS>/flux/...,
+        # so the "flux/" destination lines up with the source layout
+        # (src/flux/...) for them. The entry script is the exception - PyInstaller
+        # runs it with __file__ = <_MEIPASS>/main.py, one level above the
+        # package - which is why _bundled_path anchors frozen runs at
+        # sys._MEIPASS/"flux" instead of Path(__file__).parent. Keep both
+        # sides in sync; tests/test_main.py pins the contract.
         ("src/flux/frontend", "flux/frontend"),
         ("src/flux/assets", "flux/assets"),
     ],
