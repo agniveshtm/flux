@@ -56,8 +56,12 @@ exe = EXE(
     upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    # GUI application: end users must not get a console window. The release
-    # smoke test (`flux.exe --version`) therefore only trusts the exit code.
+    # GUI application: end users must not get a console window. A windowed
+    # build still gets a working sys.stdout when the parent supplies a handle,
+    # which is what the release smoke test relies on: -RedirectStandardOutput
+    # gives the process a real stdout pipe, so `flux.exe --version` prints the
+    # version on it and the workflow can assert the text, not just the exit
+    # code. sys.stdout is None only when nothing provides a handle (Explorer).
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,

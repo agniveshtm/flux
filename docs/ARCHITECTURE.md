@@ -41,7 +41,7 @@ flowchart LR
 | `getFilePreview` | `{ path: string }` | `{ dataUrl: string }` | `VALIDATION_ERROR` |
 | `checkForUpdate` | — | `{ available, currentVersion, latestVersion, notes, publishedAt, assetName, assetSize }` | `NETWORK_ERROR`, `NO_RELEASES`, `BAD_RESPONSE` |
 | `downloadUpdate` | — | `{ started: boolean }` | `NO_UPDATE` |
-| `installUpdate` | — | `{ installing: boolean }` | `NOT_DOWNLOADED`, `INSTALL_ERROR` |
+| `installUpdate` | — | `{ installing: boolean }` | `NOT_DOWNLOADED`, `UNSUPPORTED_PLATFORM`, `INSTALL_ERROR` |
 
 **Error shape**: `{ code: string, message: string, details?: object }`
 
@@ -80,14 +80,27 @@ after the bridge is ready) reports a release newer than `flux.__version__`,
 and the popover offers **Download update**, **Dismiss** (session-only) and
 **Mark as read** (persists the seen version in `localStorage` under
 `flux-seen-release`). The only runtime network calls the app makes are this
-check and the user-initiated download.
+check and the user-initiated download. Readiness is re-checked per call, so a
+bridge that arrives after the three-second readiness timeout still enables the
+update calls, and a check that fails clears the last known release - the card
+then shows the quiet "could not check" with a retry rather than a stale update
+offer.
 
 Every release (built by `.github/workflows/release.yml` on each `v*` tag)
-carries two Windows artifacts: the portable `flux.exe` and the Inno Setup
-installer `flux-setup-<ver>.exe`. The updater downloads the **installer** -
+carries three Windows files: the portable `flux.exe`, the Inno Setup installer
+`flux-setup-<ver>.exe` and that installer's `flux-setup-<ver>.exe.sha256`. The
+updater downloads the **installer** -
 `pick_setup_asset` refuses to fall back to the portable exe - into the OS
 temp dir (`flux-update/`), streamed in chunks to a `.part` file that is
-renamed only when complete. Python pushes `flux-update-progress`
+renamed only when complete. Everything the payload supplies is validated before
+the bytes are read: the installer URL and the checksum URL must be `https` on a
+GitHub-controlled host (`is_trusted_download_url`, re-checked after redirects),
+the asset name is reduced to a single safe filename component
+(`safe_download_name`) so it cannot write outside `flux-update/`, and the
+installer is only handed over once its SHA-256 matches the digest published as
+the `<installer>.sha256` release asset (`CHECKSUM_MISMATCH` discards the file;
+`NO_CHECKSUM` refuses a release that publishes no digest, so an installer that
+cannot be verified is never downloaded). Python pushes `flux-update-progress`
 CustomEvents (`{ phase: 'downloading' | 'downloaded' | 'error', progress,
 received?, total?, message? }`) exactly like `flux-progress`.
 
@@ -96,7 +109,9 @@ Applying an update is an explicit **Restart & update** action:
 install, `PrivilegesRequired=lowest`, so no UAC prompt) and then destroys
 the window. The setup replaces the app's files and relaunches it (see the
 `[Run]` entries in `installer/flux.iss`), completing the upgrade to whatever
-version the release carried.
+version the release carried. The action is Windows-only - every release
+artifact is a Windows installer - so anywhere else it returns
+`UNSUPPORTED_PLATFORM` instead of handing a foreign binary to the OS.
 
 ## Threading & Progress Reporting
 

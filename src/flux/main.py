@@ -20,10 +20,13 @@ A desktop app for file conversions.
 def _cli_print(text: str) -> None:
     """Best-effort stdout write for the informational CLI flags.
 
-    The packaged build is a windowed (console-less) executable, where
-    sys.stdout can be None or backed by no handle at all. --version and
-    --help must still exit 0 there, so an unusable stream degrades to
-    silence instead of a traceback that would fail the release smoke test.
+    The packaged build is a windowed (console-less) executable: sys.stdout
+    exists there only while the parent supplies a handle. The release smoke
+    test redirects the process stdout, so the version text is delivered; a
+    plain launch (e.g. from Explorer) supplies none and sys.stdout is None.
+    --version and --help must exit 0 in both cases, so a missing or unusable
+    stream degrades to silence instead of a traceback that would fail the
+    smoke test.
     """
     stream = getattr(sys, "stdout", None)
     if stream is None:

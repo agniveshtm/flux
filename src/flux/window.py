@@ -522,13 +522,22 @@ class FluxAPI:
         if setup_path is None or not Path(setup_path).is_file():
             return self._error("NOT_DOWNLOADED", "Download the update before installing it.")
 
-        args = [str(setup_path)]
-        kwargs: dict[str, Any] = {}
-        if sys.platform.startswith("win"):
-            args.append("/SILENT")
-            kwargs["creationflags"] = (
+        # Every release artifact is a Windows installer (installer/flux.iss), so
+        # on any other platform there is nothing this action could run: refuse
+        # instead of handing a foreign binary to the OS.
+        if not sys.platform.startswith("win"):
+            return self._error(
+                "UNSUPPORTED_PLATFORM",
+                "Installing an update from the app is only supported on Windows.",
+            )
+
+        # Windows-only from here on, so the unattended flags are unconditional.
+        args = [str(setup_path), "/SILENT"]
+        kwargs: dict[str, Any] = {
+            "creationflags": (
                 subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
             )
+        }
         try:
             subprocess.Popen(args, **kwargs)
         except OSError as exc:

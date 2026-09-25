@@ -29,7 +29,7 @@ flux/
 ├── .github/
 │   └── workflows/
 │       ├── test.yml              # CI: pytest matrix, frontend checks, CSS freshness, Inno script
-│       └── release.yml           # CD: v* tags → flux.exe + flux-setup-<ver>.exe on the release
+│       └── release.yml           # CD: v* tags → flux.exe + flux-setup-<ver>.exe (+ SHA-256)
 ├── installer/
 │   └── flux.iss                  # Inno Setup script (packages dist/flux.exe into the setup)
 ├── scripts/
@@ -94,7 +94,8 @@ flux/
   (newer release) ◀── (once per launch) ◀── (draft/prerelease excluded)
         │
         ▼  Download update
-  flux-setup-<ver>.exe streamed to the temp dir
+  flux-setup-<ver>.exe streamed to the temp dir and kept only if its SHA-256
+  matches the digest the release publishes next to it
   (flux-update-progress events: %, bytes, speed)
         │
         ▼  Restart & update
@@ -132,7 +133,7 @@ Launch the app (no flags) to get the window — a 900×600 resizable frame, mini
 
 | Action                    | What it does                                                                                     |
 | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| **Download update**       | Streams `flux-setup-<version>.exe` to a temp folder; the card shows version, size, %, speed and bytes transferred |
+| **Download update**       | Streams `flux-setup-<version>.exe` to a temp folder; the card shows version, size, %, speed and bytes transferred. The file is kept only if it matches the SHA-256 published beside it |
 | **Dismiss**               | Hides the badge for this session (it returns on the next launch)                                  |
 | **Mark as read / Mark all as read** | Remembers the version, so the badge stays away until a newer release appears             |
 | **Restart & update**      | Runs the downloaded setup silently (per-user, no UAC prompt) and relaunches Flux on the new version |
@@ -216,7 +217,7 @@ Download `flux-setup-<version>.exe` from [Releases](https://github.com/agnivesht
 
 Download `flux.exe` from [Releases](https://github.com/agniveshtm/flux/releases) and run it — no installation and no Python required.
 
-> **Tip:** Releases carry both artifacts. The setup is what the in-app updater downloads, so installed copies upgrade themselves in place.
+> **Tip:** Releases carry the exe, the installer and the installer's SHA-256. The setup is what the in-app updater downloads — and verifies against that checksum before offering **Restart & update** — so installed copies upgrade themselves in place.
 
 ### Install from source (development)
 
@@ -227,7 +228,7 @@ uv sync
 uv run flux
 ```
 
-Release artifacts are the exe and the installer only — no wheel or sdist is published. On macOS/Linux the app runs from source wherever pywebview has a native backend (WebKit, GTK or Qt).
+Release artifacts are the exe, the installer and the installer's SHA-256 only — no wheel or sdist is published. On macOS/Linux the app runs from source wherever pywebview has a native backend (WebKit, GTK or Qt).
 
 ## Building & releasing
 
@@ -247,7 +248,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-`release.yml` then verifies that the tag, `pyproject.toml` and `flux.__version__` all agree, runs the test suite, builds `flux.exe` (smoke-tested via `--version`), compiles the installer with that version, and publishes both files on the release with auto-generated notes. The tag version is what the updater compares against, so the three-way check is what keeps updates working for everyone already installed.
+`release.yml` then verifies that the tag, `pyproject.toml` and `flux.__version__` all agree, runs the test suite, builds `flux.exe` (smoke-tested via `--version`), compiles the installer with that version, publishes the installer's SHA-256 beside it (the digest the updater verifies before installing), and uploads those files to the release with auto-generated notes. The tag version is what the updater compares against, so the three-way check is what keeps updates working for everyone already installed.
 
 ## Documentation
 

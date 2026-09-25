@@ -45,10 +45,12 @@ jobs:
         run: uv run pyinstaller flux.spec
       - name: Smoke test the built executable
         # PowerShell does not wait for windowed (console-less) executables,
-        # so Start-Process -Wait is required to observe the exit code. The
-        # redirected stdout verifies the printed version too - this runs the
-        # full frozen import chain (webview, Pillow, flux) without opening
-        # a window.
+        # so Start-Process -Wait is required to observe the exit code.
+        # -RedirectStandardOutput hands the process a real stdout handle, so
+        # sys.stdout exists even without a console and the printed version is
+        # assertable (sys.stdout is None only when nothing supplies a handle,
+        # e.g. a plain Explorer launch). This still runs the full frozen import
+        # chain (webview, Pillow, flux) without opening a window.
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
@@ -71,7 +73,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
           $setup = "dist\flux-setup-$version.exe"
           if (-not (Test-Path $setup)) { throw "Expected artifact $setup was not produced" }
-      - name: Upload exe and setup to GitHub Release
+      - name: Publish the installer's SHA-256
+        shell: pwsh
+        # The updater refuses an installer whose published digest it cannot
+        # fetch or match, so every release must carry this file next to the
+        # setup. Format is sha256sum-compatible: "<64 hex>  <name>".
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $setup = "dist\flux-setup-$version.exe"
+          if (-not (Test-Path $setup)) { throw "Expected artifact $setup was not produced" }
+          $digest = (Get-FileHash -Algorithm SHA256 -Path $setup).Hash.ToLower()
+          "$digest  flux-setup-$version.exe" | Set-Content -Encoding ascii "dist\flux-setup-$version.exe.sha256"
+          if (-not (Test-Path "dist\flux-setup-$version.exe.sha256")) { throw "checksum file was not produced" }
+      - name: Upload exe, setup and checksum to GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           name: Release ${{ github.ref_name }}
@@ -79,4 +93,5 @@ jobs:
           files: |
             dist/flux.exe
             dist/flux-setup-*.exe
+            dist/flux-setup-*.exe.sha256
           generate_release_notes: true

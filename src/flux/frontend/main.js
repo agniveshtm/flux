@@ -91,10 +91,15 @@ const App = {
         } else {
           // A failed check is not worth disturbing anyone: the menu shows a
           // quiet "could not check" with a retry, and no badge ever appears.
+          // The previously known release is dropped along with it - keeping it
+          // would leave the card selling a version this check could not
+          // confirm (the available branch renders before the error text).
+          updateInfo.value = null;
           updateCheckError.value = (info && info.message) || 'Could not check for updates.';
         }
       } catch (e) {
         console.warn('Update check failed:', e);
+        updateInfo.value = null;
         updateCheckError.value = 'Could not check for updates.';
       }
       updateState.value = 'idle';
