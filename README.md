@@ -5,8 +5,6 @@
   </picture>
 </div>
 
-Convert images between JPG, PNG and WebP in a fast, offline desktop app.
-
 ## Features
 
 - 🖼️ **Drag & drop or pick** — drop images onto the window or use **Select files**; dropped files keep their real paths (a Python-side drop listener delivers them over the bridge).
