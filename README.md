@@ -237,6 +237,8 @@ uv run pyinstaller flux.spec                    # → dist/flux.exe
 ISCC /DMyAppVersion=0.1.0 installer\flux.iss    # → dist/flux-setup-0.1.0.exe
 ```
 
+To diagnose a packaged build, set `FLUX_DEBUG=1`: `webview.start` then runs with `debug=True` and the resolved frontend/icon paths are logged to stderr. The exe is windowed, so stderr only carries output when a handle is attached — e.g. `Start-Process -RedirectStandardError err.txt dist\flux.exe`.
+
 Cut a release:
 
 ```bash

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -54,13 +55,80 @@ def _handle_cli_flags(argv: list[str]) -> bool:
     return False
 
 
+def _debug_enabled() -> bool:
+    """Whether FLUX_DEBUG asks for verbose diagnostics from a packaged build.
+
+    The executable is windowed (console-less), so pywebview's debug output -
+    and everything written by _log - reaches a terminal only when the process
+    is launched with its std handles wired up (a developer prompt, or
+    ``Start-Process -RedirectStandardError``). Setting FLUX_DEBUG=1 therefore
+    costs nothing for end users and turns the built flux.exe into a debuggable
+    build: ``webview.start(debug=True)`` plus the resolved-path logging below.
+    """
+    return os.environ.get("FLUX_DEBUG", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _log(text: str) -> None:
+    """Best-effort stderr diagnostic line (no-op unless FLUX_DEBUG is set).
+
+    sys.stderr is None when nothing supplies a handle (the usual Explorer
+    launch of a windowed exe), so this must never raise - diagnostics are not
+    worth crashing the app over.
+    """
+    if not _debug_enabled():
+        return
+    stream = getattr(sys, "stderr", None)
+    if stream is None:
+        return
+    try:
+        print(f"[flux] {text}", file=stream, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def _bundled_path(*parts: str) -> Path:
+    """Resolve a data file shipped with the app, in source runs and frozen builds.
+
+    ``flux.spec`` bundles the runtime data files with a ``flux/`` destination
+    (``("src/flux/frontend", "flux/frontend")``), so inside a one-file build
+    they sit at ``<sys._MEIPASS>/flux/...`` - the same position the package
+    occupies in a source checkout (``src/flux/...``).
+
+    For every module imported out of the bundle, ``__file__`` points at exactly
+    that package directory - *except for the entry script*. PyInstaller runs
+    ``src/flux/main.py`` as ``__main__`` with ``__file__`` set to
+    ``<sys._MEIPASS>/main.py``, one level *above* the package, so deriving the
+    frontend/icon paths from ``Path(__file__).parent`` resolved to
+    ``<sys._MEIPASS>/frontend/...`` in the packaged app: the files were in the
+    bundle (under ``flux/``), the lookup missed them, and the window started on
+    WebView2's ``ERR_FILE_NOT_FOUND`` page instead of the UI. Anchoring frozen
+    runs at ``sys._MEIPASS / "flux"`` gives both layouts one rule.
+    """
+    if getattr(sys, "frozen", False):
+        # sys._MEIPASS only exists in the frozen app (see flux.spec).
+        base = Path(getattr(sys, "_MEIPASS")) / "flux"  # type: ignore[arg-type]
+    else:
+        base = Path(__file__).resolve().parent
+    return base.joinpath(*parts)
+
+
 def create_window() -> webview.Window | None:
     registry = ConverterRegistry()
     registry.register(PillowImageConverter())
 
     api = FluxAPI(registry)
 
-    frontend_path = Path(__file__).parent / "frontend" / "index.html"
+    frontend_path = _bundled_path("frontend", "index.html")
+    _log(f"frontend={frontend_path} exists={frontend_path.is_file()}")
+    if not frontend_path.is_file():
+        # Fail loudly instead of parking the user on an opaque
+        # ERR_FILE_NOT_FOUND page: the windowed build shows this traceback in
+        # a dialog (disable_windowed_traceback=False in flux.spec) and stderr
+        # carries it whenever a handle is attached.
+        raise FileNotFoundError(
+            f"bundled frontend not found: {frontend_path} "
+            f"(frozen={getattr(sys, 'frozen', False)}, __file__={__file__})"
+        )
     window = webview.create_window(
         "Flux",
         url=frontend_path.as_uri(),
@@ -79,8 +147,9 @@ def main() -> None:
     if _handle_cli_flags(sys.argv[1:]):
         return
     create_window()
-    icon_path = Path(__file__).parent / "assets" / "favicon.ico"
-    webview.start(icon=str(icon_path))
+    icon_path = _bundled_path("assets", "favicon.ico")
+    _log(f"icon={icon_path} exists={icon_path.is_file()}")
+    webview.start(icon=str(icon_path), debug=_debug_enabled())
 
 
 if __name__ == "__main__":
