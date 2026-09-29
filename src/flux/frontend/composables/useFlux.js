@@ -126,7 +126,7 @@ window.Flux.useFlux = function() {
     mockJobs.set(jobId, {
       status: 'running',
       progress: 0,
-      outputPaths: [],
+      outputs: [],
       error: null,
       totalFiles,
       completed,
@@ -144,7 +144,13 @@ window.Flux.useFlux = function() {
         const progress = Math.round((completed / totalFiles) * 100);
         job.progress = progress;
         job.completed = completed;
-        job.outputPaths.push(`/mock/output/${file.name.replace(/\.[^.]+$/, '')}.${targetFormat}`);
+        // Browser-dev rows carry no filesystem path, so the row key falls back
+        // to the filename - see applyOutputs in main.js, which matches on the
+        // same key.
+        job.outputs.push({
+          input: file.path || file.name,
+          output: `/mock/output/${file.name.replace(/\.[^.]+$/, '')}.${targetFormat}`,
+        });
         if (completed === totalFiles) {
           job.status = 'complete';
         }
@@ -168,7 +174,7 @@ window.Flux.useFlux = function() {
     return {
       status: job.status,
       progress: job.progress,
-      outputPaths: job.outputPaths,
+      outputs: job.outputs,
       error: job.error,
     };
   }
@@ -285,9 +291,13 @@ window.Flux.useFlux = function() {
     });
   }
 
-  async function getFilePreview(path) {
+  // `maxEdge` bounds the longest edge of the returned image (Python default is
+  // a thumbnail size); rows pass nothing, the fullscreen modal asks for a
+  // larger one. Without it every row would pull a full-resolution image across
+  // the bridge at once, just to paint a 64x64 box.
+  async function getFilePreview(path, options = {}) {
     if (hasBridge()) {
-      return callApi('getFilePreview', [{ path }]);
+      return callApi('getFilePreview', [{ path, ...options }]);
     }
     // Mock implementation - can't read local files in browser
     await delay(50);

@@ -27,6 +27,17 @@ Object.entries(components).forEach(([name, component]) => {
   }
 });
 
+// Which target formats each input format may be converted to. One table, used
+// both for the FormatSelect options and for the per-row default; it was
+// previously spelled out twice in main.js and again in FormatSelect.js, and the
+// inline boolean form relied on && binding tighter than || to come out right.
+const TARGETS_BY_INPUT = {
+  jpg: ['png', 'webp'],
+  jpeg: ['png', 'webp'],
+  png: ['jpg', 'webp'],
+  webp: ['jpg', 'png'],
+};
+
 // Main App Component
 const App = {
   name: 'FluxApp',
@@ -190,15 +201,14 @@ const App = {
 
       try {
         const formats = await getSupportedFormats();
-        supportedFormats.value = formats.output || {};
-        // Build input->output mapping
+        // Single source of the input->target matrix for the UI: main.js builds
+        // it, FileRow passes it to FormatSelect. FormatSelect used to repeat the
+        // same map locally, and the two could disagree silently.
         const mapping = {};
         (formats.input || []).forEach(input => {
-          mapping[input] = (formats.output || []).filter(out => 
-            (input === 'jpg' || input === 'jpeg') && ['png', 'webp'].includes(out) ||
-            input === 'png' && ['jpg', 'webp'].includes(out) ||
-            input === 'webp' && ['jpg', 'png'].includes(out)
-          );
+          const key = String(input).toLowerCase();
+          const allowed = TARGETS_BY_INPUT[key] || [];
+          mapping[input] = (formats.output || []).filter(out => allowed.includes(out));
         });
         supportedFormats.value = mapping;
       } catch (e) {
@@ -266,13 +276,8 @@ const App = {
     }
 
     function getDefaultTargetFormat(inputExt) {
-      const map = {
-        jpg: 'png',
-        jpeg: 'png',
-        png: 'jpg',
-        webp: 'jpg',
-      };
-      return map[inputExt.toLowerCase()] || 'png';
+      const targets = TARGETS_BY_INPUT[String(inputExt).toLowerCase()] || [];
+      return targets[0] || 'png';
     }
 
     function removeFile(index) {
@@ -338,6 +343,7 @@ const App = {
       });
 
       let startedAnyJob = false;
+      let startedRows = [];
       for (const [targetFormat, rows] of groups) {
         try {
           // Plain {name, size, type, path} objects only - a native File object
@@ -352,20 +358,30 @@ const App = {
           const result = await convert(fileObjects, targetFormat, { outputDir: outputDir.value });
 
           if (result && result.jobId) {
-            startProgressPolling(result.jobId, rows.map(f => f.id));
+            startProgressPolling(result.jobId, rows);
             startedAnyJob = true;
+            startedRows.push(...rows);
           } else if (result && result.details && result.details.outputDir) {
             // The remembered output folder is gone (deleted/renamed, or an
             // unusable value an earlier build stored): forget it so the next
             // Convert asks for a real one, instead of failing every time.
             forgetOutputDir();
             const message = 'The output folder is no longer available. Choose a folder to continue.';
+            // Only rows that have not been handed to a job yet. An earlier
+            // group may already be converting in the background, and flipping
+            // its rows to "error" would orphan a thread that is still writing
+            // files - the polling loop owns those rows until it settles.
+            const running = new Set(startedRows);
             pendingFiles.forEach(f => {
+              if (running.has(f)) return;
               f.status = 'error';
               f.error = message;
             });
             console.error('Conversion failed:', message, result.details.outputDir);
-            isConverting.value = false;
+            // A running job still reports its own rows, and its poll clears
+            // isConverting once they settle; clearing it here would let a new
+            // conversion start while that thread is still writing.
+            if (!startedAnyJob) isConverting.value = false;
             return;
           } else {
             // The API rejected the request without throwing (e.g. a validation
@@ -391,50 +407,90 @@ const App = {
       }
     }
 
-    function startProgressPolling(jobId, fileIds) {
+    function startProgressPolling(jobId, rows) {
       const timer = setInterval(async () => {
+        // Any exit from the poll must stop the interval: a job is deleted from
+        // Python's registry the moment it reports a terminal state, so the next
+        // poll gets {code: 'NOT_FOUND'} with no `status` - and neither a bridge
+        // rejection nor that response matches a branch below. Leaving the timer
+        // running there wedges the UI on "Converting..." until restart.
+        const stop = () => {
+          clearInterval(timer);
+          progressTimers.value.delete(jobId);
+          checkAllComplete();
+        };
+
+        let progress;
         try {
-          const progress = await getProgress(jobId);
-          
-          if (progress.status === 'running' || progress.status === 'pending') {
-            const pct = progress.progress || 0;
-            fileIds.forEach((fid, idx) => {
-              const file = files.value.find(f => f.id === fid);
-              if (file) {
-                file.status = 'converting';
-                file.progress = pct;
-              }
-            });
-          } else if (progress.status === 'complete') {
-            fileIds.forEach((fid, idx) => {
-              const file = files.value.find(f => f.id === fid);
-              if (file) {
-                file.status = 'done';
-                file.progress = 100;
-                file.outputPath = progress.outputPaths?.[idx];
-              }
-            });
-            clearInterval(timer);
-            progressTimers.value.delete(jobId);
-            checkAllComplete();
-          } else if (progress.status === 'error') {
-            fileIds.forEach(fid => {
-              const file = files.value.find(f => f.id === fid);
-              if (file) {
-                file.status = 'error';
-                file.error = progress.error;
-              }
-            });
-            clearInterval(timer);
-            progressTimers.value.delete(jobId);
-            checkAllComplete();
-          }
+          progress = await getProgress(jobId);
         } catch (e) {
           console.error('Progress polling error:', e);
+          failRows(rows, 'Lost contact with the converter.');
+          stop();
+          return;
+        }
+
+        const status = progress && progress.status;
+        if (status === 'running' || status === 'pending') {
+          const pct = progress.progress || 0;
+          rows.forEach(file => {
+            file.status = 'converting';
+            file.progress = pct;
+          });
+        } else if (status === 'complete') {
+          applyOutputs(rows, progress);
+          stop();
+        } else if (status === 'error') {
+          failRows(rows, (progress && progress.error) || 'Conversion failed');
+          stop();
+        } else {
+          // Unknown job, or a response shape this loop cannot interpret. The
+          // real outcome is unknowable from here, so surface it rather than
+          // polling a job id that no longer exists.
+          failRows(rows, (progress && progress.message) || 'Conversion status is unavailable.');
+          stop();
         }
       }, 200);
 
       progressTimers.value.set(jobId, timer);
+    }
+
+    // Match each output back to the row that produced it. `outputs` carries the
+    // input path alongside the output; `outputPaths` alone cannot be zipped with
+    // the rows, because it is shorter than the request whenever a file failed -
+    // positional matching then shows a successful file's path on the row that
+    // failed and leaves the real success with no path at all.
+    function applyOutputs(rows, progress) {
+      const outputs = Array.isArray(progress.outputs) ? progress.outputs : null;
+      rows.forEach((file, idx) => {
+        let outputPath;
+        if (outputs) {
+          // Same key the converter reports: the input path, or the filename for
+          // browser-dev rows that have none.
+          const key = file.path || file.name;
+          const match = outputs.find(entry => entry && entry.input === key);
+          if (!match) {
+            file.status = 'error';
+            file.error = (progress.error || 'This file did not convert.');
+            file.progress = 0;
+            return;
+          }
+          outputPath = match.output;
+        } else {
+          outputPath = (progress.outputPaths || [])[idx];
+        }
+        file.status = 'done';
+        file.progress = 100;
+        file.outputPath = outputPath;
+      });
+    }
+
+    function failRows(rows, message) {
+      rows.forEach(file => {
+        if (file.status === 'done') return;
+        file.status = 'error';
+        file.error = message;
+      });
     }
 
     function checkAllComplete() {

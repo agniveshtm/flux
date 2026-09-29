@@ -72,6 +72,7 @@ class PillowImageConverter(BaseConverter):
                     self._save(converted, output_path, target, conversion_options)
 
                 result.output_paths.append(str(output_path))
+                result.outputs.append((str(source), str(output_path)))
             except Exception as exc:
                 result.errors.append(f"{source.name}: {exc}")
             finally:

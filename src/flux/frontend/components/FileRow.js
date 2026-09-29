@@ -32,6 +32,10 @@ window.Flux.FileRow = {
     return {
       previewUrl: null,
       previewError: null,
+      // Full-resolution view, fetched only when the modal opens: the thumbnail
+      // is downscaled in Python precisely so a batch of rows does not each pull
+      // a whole image across the bridge at once.
+      fullUrl: null,
       fullscreenLoading: false,
       showFullscreen: false,
     };
@@ -57,10 +61,13 @@ window.Flux.FileRow = {
     // file:// so a path-based <img src> is blocked, and File objects dropped
     // onto the window are not readable by the backend. Dropped rows preview
     // once their path arrives (see the file.path watcher).
-    createPreviewUrl() {
+    async createPreviewUrl() {
       this.cleanupPreview();
       if (this.file.path && this.getFilePreview) {
-        this.fetchPreview(this.file.path);
+        // Downscaled by default: this drives a 64x64 thumbnail, and every row
+        // requests one as soon as it mounts.
+        const dataUrl = await this.fetchPreview(this.file.path);
+        if (dataUrl) this.previewUrl = dataUrl;
       } else if (this.file.objectUrl) {
         // Browser dev / dropped rows awaiting flux-dropped-paths: a blob URL
         // keeps the thumbnail warm until the real path lands.
@@ -70,18 +77,27 @@ window.Flux.FileRow = {
     cleanupPreview() {
       this.previewUrl = null;
       this.previewError = null;
+      this.fullUrl = null;
     },
-    async fetchPreview(path) {
+    // Returns the data URL, or null. `applyFallback` decides what a failure
+    // means: the thumbnail fetch falls back to the blob URL / error state,
+    // while the modal fetch must not touch either - the thumbnail is still
+    // valid, and the modal falls back to showing it.
+    async fetchPreview(path, maxEdge, applyFallback = true) {
       try {
-        const result = await this.getFilePreview(path);
+        const result = await this.getFilePreview(path, maxEdge ? { maxEdge } : {});
         if (result && result.dataUrl) {
-          this.previewUrl = result.dataUrl;
-        } else {
+          return result.dataUrl;
+        }
+        if (applyFallback) {
           this.useFallbackOrError((result && result.message) || 'Preview not available');
         }
       } catch (e) {
-        this.useFallbackOrError((e && e.message) || 'Preview failed');
+        if (applyFallback) {
+          this.useFallbackOrError((e && e.message) || 'Preview failed');
+        }
       }
+      return null;
     },
     // A failed bridge preview should not blank a thumbnail we already have.
     useFallbackOrError(message) {
@@ -92,18 +108,22 @@ window.Flux.FileRow = {
       }
     },
     async onPreviewClick() {
-      if (this.previewUrl) {
-        // Reuse the loaded thumbnail data URL for the fullscreen view.
-        this.showFullscreen = true;
-        return;
-      }
       if (this.file.path && this.getFilePreview && !this.fullscreenLoading) {
         this.fullscreenLoading = true;
-        await this.fetchPreview(this.file.path);
+        // The thumbnail is deliberately too small for the modal, so ask Python
+        // for a larger render now that one is actually about to be shown.
+        const dataUrl = await this.fetchPreview(this.file.path, 2048, false);
         this.fullscreenLoading = false;
-        if (this.previewUrl) {
+        if (dataUrl) {
+          this.fullUrl = dataUrl;
           this.showFullscreen = true;
+          return;
         }
+      }
+      if (this.previewUrl) {
+        // No bridge or the fetch failed: show what we already have rather than
+        // nothing at all.
+        this.showFullscreen = true;
       }
     },
     closeFullscreen() {
@@ -115,8 +135,8 @@ window.Flux.FileRow = {
       return this.file.name.split('.').pop()?.toLowerCase() || '';
     },
     validTargets() {
-      const formats = this.supportedFormats[this.inputFormat] || [];
-      return formats;
+      const key = String(this.inputFormat).toLowerCase();
+      return this.supportedFormats[key] || this.supportedFormats[this.inputFormat] || [];
     },
     statusText() {
       switch (this.file.status) {
@@ -200,6 +220,7 @@ window.Flux.FileRow = {
         <FormatSelect
           :input-format="inputFormat"
           :target-format="file.targetFormat"
+          :options="validTargets"
           :disabled="file.status === 'converting' || file.status === 'done'"
           @update:targetFormat="val => $emit('format-change', val)"
         />
@@ -246,8 +267,8 @@ window.Flux.FileRow = {
         </svg>
       </button>
       <div class="preview-modal-body">
-        <img v-if="previewUrl"
-             :src="previewUrl"
+        <img v-if="fullUrl || previewUrl"
+             :src="fullUrl || previewUrl"
              :alt="file.name"
              class="preview-modal-image"
          />

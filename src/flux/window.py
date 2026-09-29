@@ -34,6 +34,9 @@ class _Job:
     status: str = "pending"
     progress: int = 0
     output_paths: list[str] = field(default_factory=list)
+    # (input, output) pairs, so the frontend can match each output to the row
+    # that produced it instead of guessing by list position.
+    outputs: list[tuple[str, str]] = field(default_factory=list)
     error: str | None = None
 
 
@@ -260,6 +263,11 @@ class FluxAPI:
             }
             if job.output_paths:
                 response["outputPaths"] = list(job.output_paths)
+            if job.outputs:
+                response["outputs"] = [
+                    {"input": input_path, "output": output_path}
+                    for input_path, output_path in job.outputs
+                ]
             if job.error:
                 response["error"] = job.error
 
@@ -362,13 +370,30 @@ class FluxAPI:
 
         return {"opened": True}
 
-    # Cap for getFilePreview: the whole file crosses the bridge as base64, so
-    # an unbounded read lets the page exhaust memory with one huge file.
+    # Cap for getFilePreview: the file crosses the bridge as base64, so an
+    # unbounded read lets the page exhaust memory with one huge file.
     _MAX_PREVIEW_BYTES = 32 * 1024 * 1024
 
+    # Longest edge, in pixels, of a preview returned by default. Rows render a
+    # 64x64 thumbnail and every row asks at once, so full-resolution previews
+    # made peak memory scale with batch size while the extra pixels went
+    # unseen. The modal passes _PREVIEW_FULL_MAX_EDGE for the on-demand view.
+    _PREVIEW_THUMB_MAX_EDGE = 512
+    _PREVIEW_FULL_MAX_EDGE = 2048
+
     # Read a file and return it as a base64 data URL for preview rendering.
-    def getFilePreview(self, path: str | dict[str, Any] | None = None) -> dict[str, Any]:
+    #
+    # `options` may be {"maxEdge": int} to bound the longest edge (default
+    # _PREVIEW_THUMB_MAX_EDGE; values <= 0 mean "as stored"). The image is
+    # decoded and re-encoded at that size, so what crosses the bridge is a few
+    # KB rather than the whole file.
+    def getFilePreview(
+        self,
+        path: str | dict[str, Any] | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if isinstance(path, dict):
+            options = path
             path = path.get("path")
 
         if not isinstance(path, str) or not path.strip():
@@ -396,15 +421,45 @@ class FluxAPI:
                 "VALIDATION_ERROR", "Only image files can be previewed.", {"path": path}
             )
 
+        max_edge = self._PREVIEW_THUMB_MAX_EDGE
+        if isinstance(options, dict) and "maxEdge" in options:
+            try:
+                max_edge = int(options.get("maxEdge") or 0)
+            except (TypeError, ValueError):
+                max_edge = self._PREVIEW_THUMB_MAX_EDGE
+
         try:
             import base64
+            from io import BytesIO
 
-            with file_path.open("rb") as handle:
-                data = handle.read(self._MAX_PREVIEW_BYTES + 1)
-            if len(data) > self._MAX_PREVIEW_BYTES:
-                return self._error(
-                    "VALIDATION_ERROR", "File is too large to preview.", {"path": path}
-                )
+            from PIL import Image, ImageOps
+
+            with Image.open(file_path) as image:
+                image.load()
+                decoded = ImageOps.exif_transpose(image)
+
+            if max_edge > 0:
+                decoded.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+
+                buffer = BytesIO()
+                # Transparency has no JPEG representation, so those images stay
+                # PNG; everything else re-encodes far smaller as JPEG.
+                has_alpha = "A" in decoded.getbands() or "transparency" in decoded.info
+                if has_alpha:
+                    decoded.convert("RGBA").save(buffer, format="PNG", optimize=True)
+                    mime_type = "image/png"
+                else:
+                    decoded.convert("RGB").save(buffer, format="JPEG", quality=82)
+                    mime_type = "image/jpeg"
+                data = buffer.getvalue()
+            else:
+                with file_path.open("rb") as handle:
+                    data = handle.read(self._MAX_PREVIEW_BYTES + 1)
+                if len(data) > self._MAX_PREVIEW_BYTES:
+                    return self._error(
+                        "VALIDATION_ERROR", "File is too large to preview.", {"path": path}
+                    )
+
             b64 = base64.b64encode(data).decode("ascii")
             data_url = f"data:{mime_type};base64,{b64}"
             return {"dataUrl": data_url}
@@ -615,6 +670,7 @@ class FluxAPI:
                 return
 
             job.output_paths = list(result.output_paths)
+            job.outputs = list(result.outputs)
             errors = "; ".join(result.errors)
             if cancelled:
                 job.status = "error"
@@ -649,6 +705,10 @@ class FluxAPI:
                 "status": job.status,
                 "progress": job.progress,
                 "outputPaths": list(job.output_paths),
+                "outputs": [
+                    {"input": input_path, "output": output_path}
+                    for input_path, output_path in job.outputs
+                ],
                 "error": job.error,
             }
 
