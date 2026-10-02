@@ -130,7 +130,12 @@ class PillowImageConverter(BaseConverter):
                         )
 
                 result.output_paths.append(str(output_path))
-                result.outputs.append((str(source), str(output_path)))
+                # Reported against the path the caller supplied, not the
+                # expanded one: the frontend matches outputs to rows by
+                # string equality on the path it sent, so echoing back an
+                # expanded "~/..." would match nothing and mark a successful
+                # file as failed.
+                result.outputs.append((input_path, str(output_path)))
             except Exception as exc:
                 result.errors.append(f"{source.name}: {exc}")
             finally:

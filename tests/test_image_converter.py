@@ -509,10 +509,10 @@ def test_avif_is_readable_as_a_conversion_input(
         assert result.size == (256, 256)
 
 
-@requires_avif
 def test_avif_is_absent_from_the_matrix_without_an_encoder() -> None:
-    # The format list is capability-driven, so a build without libavif never
-    # offers AVIF rather than failing at save time.
+    # Deliberately NOT guarded by requires_avif: that skip fires exactly when
+    # there is no encoder, which is the only case this test exists to cover.
+    # The assertion holds either way, so it must run unconditionally.
     assert ("avif" in OUTPUT_FORMATS) is _avif_available()
 
 
@@ -537,6 +537,32 @@ def test_every_declared_output_format_has_an_encoder(
     expected = _EXPECTED_CONTAINER.get(target, target.upper())
     with Image.open(output) as result:
         assert result.format == expected
+
+
+def test_outputs_report_the_caller_supplied_path(
+    tmp_path: Path, converter: PillowImageConverter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The frontend matches outputs to rows by string equality against the path
+    # it sent, so the converter must echo that verbatim rather than the expanded
+    # path it resolved for I/O. Pointing HOME at tmp_path makes "~/in.png"
+    # expand to a file that really exists, so the conversion succeeds and the
+    # reported key is actually checked.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    _write(tmp_path / "in.png", Image.new("RGB", (32, 32), (4, 5, 6)))
+
+    result = converter.convert(
+        input_paths=["~/in.png"],
+        output_dir=str(tmp_path),
+        target_format="png",
+        options={},
+        progress_cb=lambda current, total: None,
+        cancel_event=Event(),
+    )
+
+    assert not result.errors, result.errors
+    assert result.outputs[0][0] == "~/in.png"
+    assert Path(result.outputs[0][1]).is_file()
 
 
 def test_unknown_output_format_is_rejected(

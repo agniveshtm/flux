@@ -43,6 +43,12 @@ const normalizeExt = (ext) => {
   return key === 'jpeg' ? 'jpg' : key;
 };
 
+// FileRow resolves a row's targets by the raw extension on its filename, and
+// the backend reports "jpg" for a file named photo.jpeg. Exposed so both sides
+// normalize identically - without it a .jpeg row matches no matrix entry and
+// its dropdown renders "No targets".
+window.Flux.normalizeExt = normalizeExt;
+
 // Which target formats each input format may be converted to.
 //
 // This used to be a hardcoded TARGETS_BY_INPUT table duplicated between main.js
@@ -277,6 +283,28 @@ const App = {
           mapping[input] = targetsForInput(input);
         });
         supportedFormats.value = mapping;
+
+        // Rows admitted by the pre-load fallback can turn out to be
+        // unsupported once the real capabilities land: the fallback lists AVIF
+        // unconditionally, but a Pillow build without libavif cannot write it,
+        // and such a row would otherwise sit in the list until Convert rejected
+        // it with an opaque UNSUPPORTED_FORMAT. Now that supportedFormats holds
+        // the backend's real list, isSupportedInput defers to it, so pruning
+        // here drops exactly those rows. On a build that does support AVIF the
+        // entry is present and nothing is removed.
+        const kept = [];
+        const dropped = [];
+        files.value.forEach(file => {
+          const input = isSupportedInput(file.name.split('.').pop() || '');
+          (input ? kept : dropped).push(file);
+        });
+        files.value = kept;
+        if (dropped.length) {
+          console.warn(
+            `Dropped ${dropped.length} file(s) this build cannot read:`,
+            dropped.map(f => f.name).join(', ')
+          );
+        }
       } catch (e) {
         console.error('Failed to load supported formats:', e);
       }
@@ -494,6 +522,12 @@ const App = {
     }
 
     function startProgressPolling(jobId, rows) {
+      // setInterval does not wait for the async callback, so a slow
+      // getProgress lets two ticks overlap. clearInterval stops *future* ticks
+      // but cannot cancel one already awaiting, so a stale "running" response
+      // could land after a terminal one and flip settled rows back to
+      // converting. `settled` is checked after every await to drop it.
+      let settled = false;
       const timer = setInterval(async () => {
         // Any exit from the poll must stop the interval: a job is deleted from
         // Python's registry the moment it reports a terminal state, so the next
@@ -501,6 +535,7 @@ const App = {
         // rejection nor that response matches a branch below. Leaving the timer
         // running there wedges the UI on "Converting..." until restart.
         const stop = () => {
+          settled = true;
           clearInterval(timer);
           progressTimers.value.delete(jobId);
           checkAllComplete();
@@ -510,11 +545,16 @@ const App = {
         try {
           progress = await getProgress(jobId);
         } catch (e) {
+          if (settled) return;
           console.error('Progress polling error:', e);
           failRows(rows, 'Lost contact with the converter.');
           stop();
           return;
         }
+
+        // A newer tick already reached a terminal state for this job; this
+        // response is stale and must not touch the rows.
+        if (settled) return;
 
         const status = progress && progress.status;
         if (status === 'running' || status === 'pending') {

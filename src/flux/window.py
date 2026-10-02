@@ -386,6 +386,13 @@ class FluxAPI:
     _PREVIEW_THUMB_MAX_EDGE = 512
     _PREVIEW_FULL_MAX_EDGE = 2048
 
+    # Ceiling on decoded pixels for a preview, applied from the header before
+    # anything is loaded. ~6000x6000 is well beyond a normal camera photo while
+    # capping the worst case at a few hundred MB rather than an unbounded
+    # allocation; Image.MAX_IMAGE_PIXELS guards decompression bombs but sits
+    # high enough to be no protection against a legitimately huge photo.
+    _PREVIEW_MAX_PIXELS = 40_000_000
+
     # Read a file and return it as a base64 data URL for preview rendering.
     #
     # `options` may be {"maxEdge": int} to bound the longest edge (default
@@ -453,6 +460,22 @@ class FluxAPI:
             from PIL import Image, ImageOps
 
             with Image.open(file_path) as image:
+                # Decoding happens in full before thumbnail() shrinks it, so a
+                # small file that decompresses to an enormous image (a 40MP
+                # photo, or a highly compressed one) would allocate hundreds of
+                # MB in full-size form despite the preview cap. size is readable
+                # from the header, so reject before load() rather than after.
+                width, height = image.size
+                if width * height > self._PREVIEW_MAX_PIXELS:
+                    return self._error(
+                        "VALIDATION_ERROR",
+                        "Image is too large to preview.",
+                        {"path": path},
+                    )
+                # Lets the JPEG decoder scale down during decode, so the full
+                # resolution is never materialised. A no-op for other formats.
+                if max_edge > 0:
+                    image.draft("RGB", (max_edge, max_edge))
                 image.load()
                 decoded = ImageOps.exif_transpose(image)
 

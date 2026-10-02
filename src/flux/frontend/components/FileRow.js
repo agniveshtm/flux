@@ -131,12 +131,15 @@ window.Flux.FileRow = {
     },
   },
   computed: {
+    // Normalized the same way the backend normalizes format names
+    // (window.Flux.normalizeExt, set by main.js). The backend reports "jpg"
+    // for a file named photo.jpeg, so looking the matrix up under the raw
+    // extension found nothing and the dropdown showed "No targets".
     inputFormat() {
-      return this.file.name.split('.').pop()?.toLowerCase() || '';
+      return window.Flux.normalizeExt(this.file.name.split('.').pop() || '');
     },
     validTargets() {
-      const key = String(this.inputFormat).toLowerCase();
-      return this.supportedFormats[key] || this.supportedFormats[this.inputFormat] || [];
+      return this.supportedFormats[this.inputFormat] || [];
     },
     statusText() {
       switch (this.file.status) {
