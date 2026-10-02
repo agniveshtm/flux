@@ -604,15 +604,24 @@ class FluxAPI:
     def installUpdate(self) -> dict[str, Any]:
         """Run the downloaded installer and close the app.
 
-        The installer replaces the very files this process is executing
-        from, so the sequence is: start the setup unattended (/SILENT - the
-        script installs per-user with PrivilegesRequired=lowest, so there is
-        no UAC prompt), then leave. Launching *before* the teardown matters:
-        a timer scheduled at exit would be killed with the interpreter, and
-        a launch strictly after exit would need a helper process. If Setup
-        still finds locked files it closes them itself - silent mode never
-        prompts - and relaunching after the upgrade is configured in the
-        .iss script.
+        The installer replaces the very files this process is executing from,
+        so the sequence is: start the setup unattended, then leave. Launching
+        *before* the teardown matters - a timer scheduled at exit would be
+        killed with the interpreter, and a launch strictly after exit would
+        need a helper process.
+
+        The flags are not decoration. Restart Manager scans for processes
+        holding files the setup is about to write and, finding the still-live
+        flux.exe, raises its own "close all applications" prompt - which
+        /SILENT does NOT suppress: /SILENT hides the wizard and background
+        window, but the progress window and every non-wizard prompt remain.
+        Without /CLOSEAPPLICATIONS the upgrade therefore stalls on a dialog
+        asking the user to close the app that is waiting on that dialog.
+        /FORCECLOSEAPPLICATIONS lets it terminate the app instead of asking,
+        which is safe because the app is about to exit regardless, and
+        /NORESTARTAPPLICATIONS stops it being relaunched behind the new install
+        (the .iss [Run] section owns relaunching). /NORESTART avoids a silent
+        install raising a "Reboot now?" message box.
         """
         setup_path = self._downloaded_setup
         if setup_path is None or not Path(setup_path).is_file():
@@ -628,7 +637,15 @@ class FluxAPI:
             )
 
         # Windows-only from here on, so the unattended flags are unconditional.
-        args = [str(setup_path), "/SILENT"]
+        args = [
+            str(setup_path),
+            "/SILENT",
+            "/CLOSEAPPLICATIONS",
+            "/FORCECLOSEAPPLICATIONS",
+            "/NORESTARTAPPLICATIONS",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+        ]
         kwargs: dict[str, Any] = {
             "creationflags": (
                 subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
