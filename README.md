@@ -9,7 +9,11 @@
 
 - 🖼️ **Drag & drop or pick** — drop images onto the window or use **Select files**; dropped files keep their real paths (a Python-side drop listener delivers them over the bridge).
 - 🔁 **Batch conversion** — queue as many files as you like and hit **Convert all**; files are grouped by target format and each row finishes with its own status.
-- 🎛️ **Per-file format picker** — switch any row between JPG ⇄ PNG ⇄ WebP; a sensible target is preselected based on the input format.
+- 🎛️ **Per-file format picker** — switch any row between JPG, PNG, WebP, ICO, AVIF and GIF in both directions; a sensible target is preselected based on the input format.
+- 🎚️ **Conversion options** — a quality slider for lossy targets (JPG, WebP, AVIF) and a dithering toggle for GIF, shown only when the selected targets actually use them.
+- 🖼️ **ICO at every size** — one `.ico` with 16/32/48/256px frames at once, square-padded with real transparency.
+- 🎞️ **Animation survives** — an animated source keeps every frame, its per-frame duration and its disposal methods when written to GIF.
+- 🌈 **Colour profiles kept** — AVIF output carries the source's ICC/XMP instead of being silently reinterpreted as sRGB.
 - 👁️ **Previews** — every row shows a thumbnail; click it for a fullscreen preview modal with an alpha checkerboard backdrop.
 - 📊 **Live progress** — per-row progress bars stream from Python as `flux-progress` events, so conversions never freeze the UI.
 - 📁 **Sticky output folder** — pick an output folder once (it is remembered) and jump to it with **Open output folder**.
@@ -44,13 +48,13 @@ flux/
 │       ├── window.py             # FluxAPI - the JS ↔ Python bridge (and updater entry points)
 │       ├── converter.py          # BaseConverter ABC, registry, format normalization
 │       ├── services/
-│       │   ├── image_converter.py  # PillowImageConverter (JPG/PNG/WebP)
+│       │   ├── image_converter.py  # PillowImageConverter (JPG/PNG/WebP/ICO/AVIF/GIF)
 │       │   └── updater.py          # GitHub release check + installer download
 │       ├── assets/               # Logos, favicons, app icon
 │       └── frontend/             # Vue 3 + Tailwind (vendored, no bundler)
 │           ├── index.html
 │           ├── main.js           # App state and wiring
-│           ├── components/       # AppHeader, UpdateBell, DropZone, FileList, FileRow, ...
+│           ├── components/       # AppHeader, UpdateBell, DropZone, FileList, FileRow, ConversionOptions, ...
 │           ├── composables/      # useFlux (bridge calls), useTheme
 │           ├── assets/           # input.css (source) + app.css (compiled, committed)
 │           └── vendor/           # vue.global.prod.js
@@ -125,6 +129,7 @@ Launch the app (no flags) to get the window — a 900×600 resizable frame, mini
 | **Header**  | Flux wordmark, update bell, light/dark toggle                                    |
 | **Drop zone** | Drag & drop or click; turns crimson while dragging over                        |
 | **File list** | Toolbar (file count, converted count, Clear all) + rows with thumbnail, name, size, format picker, status badge, progress bar, remove button |
+| **Options bar** | Quality slider and GIF dithering toggle — visible only while a pending row targets a format that uses them |
 | **Footer**  | Convert all · Open output folder · output folder picker · Clear completed        |
 
 ### Update bell

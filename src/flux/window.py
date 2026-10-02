@@ -34,6 +34,9 @@ class _Job:
     status: str = "pending"
     progress: int = 0
     output_paths: list[str] = field(default_factory=list)
+    # (input, output) pairs, so the frontend can match each output to the row
+    # that produced it instead of guessing by list position.
+    outputs: list[tuple[str, str]] = field(default_factory=list)
     error: str | None = None
 
 
@@ -260,6 +263,11 @@ class FluxAPI:
             }
             if job.output_paths:
                 response["outputPaths"] = list(job.output_paths)
+            if job.outputs:
+                response["outputs"] = [
+                    {"input": input_path, "output": output_path}
+                    for input_path, output_path in job.outputs
+                ]
             if job.error:
                 response["error"] = job.error
 
@@ -301,7 +309,12 @@ class FluxAPI:
         selection = window.create_file_dialog(
             dialog_type=webview.FileDialog.OPEN,
             allow_multiple=bool(multiple),
-            file_types=("Image files (*.jpg;*.jpeg;*.png;*.webp)",),
+            file_types=(
+                # Kept in step with image_converter.INPUT_FORMATS by
+                # tests/test_formats.py: a format missing here cannot be picked
+                # through the native dialog at all.
+                "Image files (*.jpg;*.jpeg;*.png;*.webp;*.ico;*.gif;*.avif)",
+            ),
         )
         # Single-select yields a bare string while multi-select yields a tuple:
         # iterating the string would otherwise produce one "path" per character.
@@ -362,13 +375,59 @@ class FluxAPI:
 
         return {"opened": True}
 
-    # Cap for getFilePreview: the whole file crosses the bridge as base64, so
-    # an unbounded read lets the page exhaust memory with one huge file.
+    # Cap for getFilePreview: the file crosses the bridge as base64, so an
+    # unbounded read lets the page exhaust memory with one huge file.
     _MAX_PREVIEW_BYTES = 32 * 1024 * 1024
 
+    # Longest edge, in pixels, of a preview returned by default. Rows render a
+    # 64x64 thumbnail and every row asks at once, so full-resolution previews
+    # made peak memory scale with batch size while the extra pixels went
+    # unseen. The modal passes _PREVIEW_FULL_MAX_EDGE for the on-demand view.
+    _PREVIEW_THUMB_MAX_EDGE = 512
+    _PREVIEW_FULL_MAX_EDGE = 2048
+
+    # Ceiling on decoded pixels for a preview, applied from the header before
+    # anything is loaded. ~6000x6000 is well beyond a normal camera photo while
+    # capping the worst case at a few hundred MB rather than an unbounded
+    # allocation; Image.MAX_IMAGE_PIXELS guards decompression bombs but sits
+    # high enough to be no protection against a legitimately huge photo.
+    _PREVIEW_MAX_PIXELS = 40_000_000
+
     # Read a file and return it as a base64 data URL for preview rendering.
-    def getFilePreview(self, path: str | dict[str, Any] | None = None) -> dict[str, Any]:
+    #
+    # `options` may be {"maxEdge": int} to bound the longest edge (default
+    # _PREVIEW_THUMB_MAX_EDGE; values <= 0 mean "as stored"). The image is
+    # decoded and re-encoded at that size, so what crosses the bridge is a few
+    # KB rather than the whole file.
+    # Which local files the preview bridge will decode. This is a security
+    # allowlist, not the converter's format list: the page must not be able to
+    # read arbitrary local files, and it is deliberately broader than what Flux
+    # converts (BMP/TIFF preview fine but are not conversion inputs).
+    _PREVIEW_MIME_TYPES = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".ico": "image/x-icon",
+        ".avif": "image/avif",
+        ".bmp": "image/bmp",
+        ".gif": "image/gif",
+        ".tif": "image/tiff",
+        ".tiff": "image/tiff",
+    }
+
+    @staticmethod
+    def _mime_type_for(suffix: str) -> str | None:
+        """The previewable MIME type for a file suffix, or None if not an image."""
+        return FluxAPI._PREVIEW_MIME_TYPES.get(str(suffix).lower())
+
+    def getFilePreview(
+        self,
+        path: str | dict[str, Any] | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if isinstance(path, dict):
+            options = path
             path = path.get("path")
 
         if not isinstance(path, str) or not path.strip():
@@ -378,16 +437,7 @@ class FluxAPI:
         if not file_path.is_file():
             return self._error("VALIDATION_ERROR", "File does not exist.", {"path": path})
 
-        mime_type = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".webp": "image/webp",
-            ".bmp": "image/bmp",
-            ".gif": "image/gif",
-            ".tif": "image/tiff",
-            ".tiff": "image/tiff",
-        }.get(file_path.suffix.lower())
+        mime_type = self._mime_type_for(file_path.suffix)
 
         # Only known image types: the page must not be able to read arbitrary
         # local files (configs, documents, ...) through the preview bridge.
@@ -396,15 +446,61 @@ class FluxAPI:
                 "VALIDATION_ERROR", "Only image files can be previewed.", {"path": path}
             )
 
+        max_edge = self._PREVIEW_THUMB_MAX_EDGE
+        if isinstance(options, dict) and "maxEdge" in options:
+            try:
+                max_edge = int(options.get("maxEdge") or 0)
+            except (TypeError, ValueError):
+                max_edge = self._PREVIEW_THUMB_MAX_EDGE
+
         try:
             import base64
+            from io import BytesIO
 
-            with file_path.open("rb") as handle:
-                data = handle.read(self._MAX_PREVIEW_BYTES + 1)
-            if len(data) > self._MAX_PREVIEW_BYTES:
-                return self._error(
-                    "VALIDATION_ERROR", "File is too large to preview.", {"path": path}
-                )
+            from PIL import Image, ImageOps
+
+            with Image.open(file_path) as image:
+                # Decoding happens in full before thumbnail() shrinks it, so a
+                # small file that decompresses to an enormous image (a 40MP
+                # photo, or a highly compressed one) would allocate hundreds of
+                # MB in full-size form despite the preview cap. size is readable
+                # from the header, so reject before load() rather than after.
+                width, height = image.size
+                if width * height > self._PREVIEW_MAX_PIXELS:
+                    return self._error(
+                        "VALIDATION_ERROR",
+                        "Image is too large to preview.",
+                        {"path": path},
+                    )
+                # Lets the JPEG decoder scale down during decode, so the full
+                # resolution is never materialised. A no-op for other formats.
+                if max_edge > 0:
+                    image.draft("RGB", (max_edge, max_edge))
+                image.load()
+                decoded = ImageOps.exif_transpose(image)
+
+            if max_edge > 0:
+                decoded.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+
+                buffer = BytesIO()
+                # Transparency has no JPEG representation, so those images stay
+                # PNG; everything else re-encodes far smaller as JPEG.
+                has_alpha = "A" in decoded.getbands() or "transparency" in decoded.info
+                if has_alpha:
+                    decoded.convert("RGBA").save(buffer, format="PNG", optimize=True)
+                    mime_type = "image/png"
+                else:
+                    decoded.convert("RGB").save(buffer, format="JPEG", quality=82)
+                    mime_type = "image/jpeg"
+                data = buffer.getvalue()
+            else:
+                with file_path.open("rb") as handle:
+                    data = handle.read(self._MAX_PREVIEW_BYTES + 1)
+                if len(data) > self._MAX_PREVIEW_BYTES:
+                    return self._error(
+                        "VALIDATION_ERROR", "File is too large to preview.", {"path": path}
+                    )
+
             b64 = base64.b64encode(data).decode("ascii")
             data_url = f"data:{mime_type};base64,{b64}"
             return {"dataUrl": data_url}
@@ -615,6 +711,7 @@ class FluxAPI:
                 return
 
             job.output_paths = list(result.output_paths)
+            job.outputs = list(result.outputs)
             errors = "; ".join(result.errors)
             if cancelled:
                 job.status = "error"
@@ -649,6 +746,10 @@ class FluxAPI:
                 "status": job.status,
                 "progress": job.progress,
                 "outputPaths": list(job.output_paths),
+                "outputs": [
+                    {"input": input_path, "output": output_path}
+                    for input_path, output_path in job.outputs
+                ],
                 "error": job.error,
             }
 

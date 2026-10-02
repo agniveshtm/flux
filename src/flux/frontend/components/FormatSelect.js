@@ -14,6 +14,13 @@ window.Flux.FormatSelect = {
       type: String,
       required: true,
     },
+    // Valid targets for this input, resolved by FileRow from the app-wide
+    // input->target matrix. Passed in rather than re-derived here so the
+    // conversion matrix has a single definition.
+    options: {
+      type: Array,
+      default: () => [],
+    },
     disabled: {
       type: Boolean,
       default: false,
@@ -21,16 +28,8 @@ window.Flux.FormatSelect = {
   },
   emits: ['update:targetFormat'],
   computed: {
-    options() {
-      const formatMap = {
-        jpg: ['png', 'webp'],
-        jpeg: ['png', 'webp'],
-        png: ['jpg', 'webp'],
-        webp: ['jpg', 'png'],
-      };
-      const key = this.inputFormat.toLowerCase();
-      const targets = formatMap[key] || [];
-      return targets.map(fmt => ({
+    selectOptions() {
+      return this.options.map(fmt => ({
         value: fmt,
         label: fmt.toUpperCase(),
       }));
@@ -41,13 +40,13 @@ window.Flux.FormatSelect = {
       class="input-select w-auto min-w-[120px]"
       :value="targetFormat"
       @change="$emit('update:targetFormat', $event.target.value)"
-      :disabled="disabled || options.length === 0"
+      :disabled="disabled || selectOptions.length === 0"
       aria-label="Target format"
     >
-      <option v-for="opt in options" :key="opt.value" :value="opt.value">
+      <option v-for="opt in selectOptions" :key="opt.value" :value="opt.value">
         {{ opt.label }}
       </option>
-      <option v-if="options.length === 0" value="" disabled>
+      <option v-if="selectOptions.length === 0" value="" disabled>
         No targets
       </option>
     </select>

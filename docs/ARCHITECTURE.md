@@ -31,19 +31,31 @@ flowchart LR
 
 | Method | Arguments | Returns | Errors |
 |--------|-----------|---------|--------|
-| `convert` | `{ files: { name, size, type, path }[], targetFormat: string, options?: { outputDir: string } }` | `{ jobId: string }` | `VALIDATION_ERROR`, `UNSUPPORTED_FORMAT` |
-| `getProgress` | `{ jobId: string }` | `{ status: 'pending'\|'running'\|'complete'\|'error', progress: 0-100, outputPaths?: string[], error?: string }` | `NOT_FOUND` |
+| `convert` | `{ files: { name, size, type, path }[], targetFormat: string, options?: { outputDir: string, quality?: number, dither?: boolean, icoSizes?: number[] } }` | `{ jobId: string }` | `VALIDATION_ERROR`, `UNSUPPORTED_FORMAT` |
+| `getProgress` | `{ jobId: string }` | `{ status: 'pending'\|'running'\|'complete'\|'error', progress: 0-100, outputPaths?: string[], outputs?: { input: string, output: string }[], error?: string }` | `NOT_FOUND` |
 | `cancel` | `{ jobId: string }` | `{ cancelled: boolean }` | `NOT_FOUND`, `ALREADY_COMPLETE` |
-| `getSupportedFormats` | — | `{ input: string[], output: string[] }` | — |
+| `getSupportedFormats` | — | `{ input: string[], output: string[] }` — the single source of truth for the UI's conversion matrix | — |
 | `pickFiles` | `{ multiple?: boolean }` | `{ paths: string[] }` | `CANCELLED` |
 | `pickOutputDir` | — | `{ path: string }` | `CANCELLED` |
 | `openOutputDir` | `{ path: string }` | `{ opened: boolean }` | `VALIDATION_ERROR`, `OPEN_ERROR` |
-| `getFilePreview` | `{ path: string }` | `{ dataUrl: string }` | `VALIDATION_ERROR` |
+| `getFilePreview` | `{ path: string, maxEdge?: number }` | `{ dataUrl: string }` | `VALIDATION_ERROR` |
 | `checkForUpdate` | — | `{ available, currentVersion, latestVersion, notes, publishedAt, assetName, assetSize }` | `NETWORK_ERROR`, `NO_RELEASES`, `BAD_RESPONSE` |
 | `downloadUpdate` | — | `{ started: boolean }` | `NO_UPDATE` |
 | `installUpdate` | — | `{ installing: boolean }` | `NOT_DOWNLOADED`, `UNSUPPORTED_PLATFORM`, `INSTALL_ERROR` |
 
 **Error shape**: `{ code: string, message: string, details?: object }`
+
+### Previews
+
+Previews cross the bridge as base64 data URLs, so the payload is bounded rather
+than the file: `getFilePreview` decodes the image and re-encodes it with its
+longest edge capped at `maxEdge` (default 512px, i.e. a row thumbnail).
+`FileRow` therefore requests a thumbnail when it mounts and a larger render
+(2048px) only when the fullscreen modal opens - fetching full resolution for
+every row made peak memory scale with batch size while the extra pixels were
+never displayed. `maxEdge <= 0` returns the stored bytes, still subject to the
+`_MAX_PREVIEW_BYTES` cap. Transparent images stay PNG, everything else
+re-encodes as JPEG.
 
 ### Dialog results
 
@@ -118,8 +130,17 @@ artifact is a Windows installer - so anywhere else it returns
 - **UI thread**: pywebview main loop + Vue frontend (single-threaded JS)
 - **Conversion thread**: Each `convert` call spawns a `threading.Thread` running the converter
 - **Progress channel**: Converter accepts a `progress_cb(current, total)` callable; backend pushes updates via `window.evaluate_js()` to a Vue-side event bus
-- **Job registry**: In-memory dict `jobId → { thread, converter, status, progress, outputPaths, error }`; cleaned up on completion or explicit cancel
+- **Job registry**: In-memory dict `jobId → { thread, converter, status, progress, outputPaths, outputs, error }`; cleaned up on completion or explicit cancel. A terminal status deletes the entry, so a poll that arrives afterwards gets `NOT_FOUND` — the frontend treats a response with no recognizable `status` as terminal rather than polling a job that no longer exists
 - **Cancellation**: Cooperative — converter checks a `threading.Event` flag between files/operations
+
+### Matching outputs to rows
+
+A batch that partially fails reports fewer outputs than inputs, so `outputPaths`
+alone cannot be zipped with the request rows by position — that shifted every
+output after a failure onto the wrong row. `ConversionResult.outputs` carries
+`(input, output)` pairs, `getProgress` forwards them as
+`{ input, output }[]`, and the frontend matches on the input path. Rows with no
+matching output are the ones that failed and are shown as such.
 
 ## Converter Interface (Extensible for Phase 2)
 
@@ -133,6 +154,7 @@ from typing import Callable, Optional
 class ConversionResult:
     output_paths: list[str]
     errors: list[str]
+    outputs: list[tuple[str, str]]   # (input, output) for each success
 
 class BaseConverter(ABC):
     @property
@@ -155,9 +177,19 @@ class BaseConverter(ABC):
     ) -> ConversionResult: ...
 ```
 
-- **Phase 1**: `PillowImageConverter` implements `BaseConverter`
+- **Phase 1.1**: `PillowImageConverter` implements `BaseConverter`, covering JPG, PNG,
+  WebP, ICO, AVIF and GIF. `INPUT_FORMATS` / `OUTPUT_FORMATS` in
+  `image_converter.py` declare what it can do, and the frontend derives its whole
+  input→target matrix from `getSupportedFormats()` — there is deliberately no
+  format table in the JS, so a format cannot be offered unless an encoder exists
+  for it. AVIF is gated on `PIL.features.check("avif")`, so a build without
+  libavif simply does not offer it.
 - **Phase 2**: `FFmpegVideoConverter` will implement same interface; frontend contract unchanged
 - **Registry**: `ConverterRegistry` maps format → converter instance; `get_converter_for_format()` selects at runtime
+- **Encoder dispatch**: `_save` rejects any target with no encoder, rather than
+  falling through to the last branch — otherwise a format added to
+  `OUTPUT_FORMATS` without an encoder would write the previous format's bytes
+  under the new extension.
 
 ## Folder Structure
 
@@ -269,7 +301,8 @@ flux/
   1. **Header** (56px): "Flux" wordmark (accent color, semibold) left; ThemeToggle + Settings icon right
   2. **DropZone** (flex-1, min 200px): Dashed border, centered content, crimson tint on drag-over, primary "Select files" button
   3. **FileList** (flex-1, scrollable): Table-like rows, each with filename, size, FormatSelect, status badge, ProgressBar, remove button
-  4. **Footer** (72px): "Convert all" (primary), "Open output folder" (ghost), output folder selector, "Clear completed"
+  4. **ConversionOptions** (auto height, conditional): Quality slider for lossy targets, GIF dithering toggle — renders nothing when no pending row targets a format that uses them
+  5. **Footer** (72px): "Convert all" (primary), "Open output folder" (ghost), output folder selector, "Clear completed"
 
 ### State Coverage
 

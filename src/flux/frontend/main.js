@@ -15,6 +15,7 @@ const components = {
   FileList: window.Flux.FileList,
   FileRow: window.Flux.FileRow,
   FormatSelect: window.Flux.FormatSelect,
+  ConversionOptions: window.Flux.ConversionOptions,
   ProgressBar: window.Flux.ProgressBar,
   ThemeToggle: window.Flux.ThemeToggle,
   UpdateBell: window.Flux.UpdateBell,
@@ -27,21 +28,104 @@ Object.entries(components).forEach(([name, component]) => {
   }
 });
 
+// Targets whose encoder takes a quality setting. Kept next to the option
+// wiring below because it is the one place that decides whether the slider is
+// worth showing; a target not listed here ignores a quality option.
+const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif']);
+
+// Extension normalization mirroring the backend's normalize_format
+// (src/flux/converter.py). The picker hands back "jpeg" for .jpeg files while
+// the backend's format list is normalized to "jpg", so a dropped photo.jpeg has
+// to be looked up under "jpg" or it matches no entry and the row renders with
+// no selectable targets.
+const normalizeExt = (ext) => {
+  const key = String(ext || '').trim().toLowerCase().replace(/^\./, '');
+  return key === 'jpeg' ? 'jpg' : key;
+};
+
+// FileRow resolves a row's targets by the raw extension on its filename, and
+// the backend reports "jpg" for a file named photo.jpeg. Exposed so both sides
+// normalize identically - without it a .jpeg row matches no matrix entry and
+// its dropdown renders "No targets".
+window.Flux.normalizeExt = normalizeExt;
+
+// Which target formats each input format may be converted to.
+//
+// This used to be a hardcoded TARGETS_BY_INPUT table duplicated between main.js
+// and FormatSelect.js, which meant every new format had to be added to a
+// frontend allowlist that could silently disagree with the backend encoders -
+// a format could be offered in the dropdown and then rejected by the converter,
+// or vice versa. It is now derived (see targetsForInput inside setup): every
+// declared output format is a valid target for every input format except the
+// input format itself, since re-encoding an image to the format it is already
+// in is a no-op nobody wants. getSupportedFormats() reads INPUT_FORMATS and
+// OUTPUT_FORMATS from image_converter.py, so the backend stays the single
+// source of truth.
+
 // Main App Component
 const App = {
   name: 'FluxApp',
   components,
   setup() {
     const { theme, toggleTheme, cleanup: cleanupTheme } = window.Flux.useTheme();
-    const { convert, getProgress, getSupportedFormats, pickFiles, pickOutputDir, openOutputDir, onDroppedPaths, getFilePreview, isNative, normalizeDirPath, checkForUpdate, downloadUpdate, installUpdate, onUpdateProgress } = window.Flux.useFlux();
+    const { convert, getProgress, getSupportedFormats, fallbackFormats, pickFiles, pickOutputDir, openOutputDir, onDroppedPaths, getFilePreview, isNative, normalizeDirPath, checkForUpdate, downloadUpdate, installUpdate, onUpdateProgress } = window.Flux.useFlux();
 
     const files = ref([]);
     const supportedFormats = ref({});
+    // Every format the backend can write, and the seed for the input->target
+    // matrix below. Kept separate from supportedFormats (which is that matrix,
+    // keyed by input) because the two answer different questions.
+    const supportedOutputs = ref([]);
+
+    // The conversion matrix, derived from what the backend declares rather than
+    // hardcoded here - see the comment above the removed TARGETS_BY_INPUT.
+    // FormatSelect receives its options from this through FileRow.
+    const targetsForInput = (inputExt) => {
+      const key = normalizeExt(inputExt);
+      return supportedOutputs.value.filter(out => out !== key);
+    };
     const outputDir = ref('');
     const isDragOver = ref(false);
     const isConverting = ref(false);
     const activeJobs = ref(new Map());
     const progressTimers = ref(new Map());
+
+    // --- Conversion options -----------------------------------------------
+    // qualityOverride is null until the user actually moves the slider. Sending
+    // a quality on every conversion would silently overwrite the encoders' own
+    // defaults, and those differ per format (90 for JPG/WebP, 80 for AVIF) -
+    // a single forced number would make one of them wrong. Null means "let the
+    // format decide", and the slider renders as Default.
+    const qualityOverride = ref(null);
+    const dither = ref(true);
+
+    // The targets the pending rows will actually be converted to, which is what
+    // decides whether the quality slider and the GIF dither toggle are relevant.
+    const pendingTargets = computed(() => {
+      const targets = new Set();
+      files.value.forEach((file) => {
+        if (file.status !== 'done' && file.targetFormat) targets.add(file.targetFormat);
+      });
+      return targets;
+    });
+
+    const showQualityOption = computed(() => {
+      return [...pendingTargets.value].some((target) => LOSSY_TARGETS.has(target));
+    });
+
+    const showDitherOption = computed(() => pendingTargets.value.has('gif'));
+
+    function handleQualityChange(value) {
+      qualityOverride.value = value;
+    }
+
+    function handleQualityReset() {
+      qualityOverride.value = null;
+    }
+
+    function handleDitherChange(value) {
+      dither.value = value;
+    }
 
     // --- In-app update state -----------------------------------------------
     // updateState: checking | idle | downloading | downloaded | installing | error
@@ -190,17 +274,37 @@ const App = {
 
       try {
         const formats = await getSupportedFormats();
-        supportedFormats.value = formats.output || {};
-        // Build input->output mapping
+        // Single source of the input->target matrix for the UI, derived from
+        // the backend's declared formats rather than a hand-maintained table.
+        const inputs = (formats.input || []).map(normalizeExt);
+        supportedOutputs.value = (formats.output || []).map(normalizeExt);
         const mapping = {};
-        (formats.input || []).forEach(input => {
-          mapping[input] = (formats.output || []).filter(out => 
-            (input === 'jpg' || input === 'jpeg') && ['png', 'webp'].includes(out) ||
-            input === 'png' && ['jpg', 'webp'].includes(out) ||
-            input === 'webp' && ['jpg', 'png'].includes(out)
-          );
+        inputs.forEach(input => {
+          mapping[input] = targetsForInput(input);
         });
         supportedFormats.value = mapping;
+
+        // Rows admitted by the pre-load fallback can turn out to be
+        // unsupported once the real capabilities land: the fallback lists AVIF
+        // unconditionally, but a Pillow build without libavif cannot write it,
+        // and such a row would otherwise sit in the list until Convert rejected
+        // it with an opaque UNSUPPORTED_FORMAT. Now that supportedFormats holds
+        // the backend's real list, isSupportedInput defers to it, so pruning
+        // here drops exactly those rows. On a build that does support AVIF the
+        // entry is present and nothing is removed.
+        const kept = [];
+        const dropped = [];
+        files.value.forEach(file => {
+          const input = isSupportedInput(file.name.split('.').pop() || '');
+          (input ? kept : dropped).push(file);
+        });
+        files.value = kept;
+        if (dropped.length) {
+          console.warn(
+            `Dropped ${dropped.length} file(s) this build cannot read:`,
+            dropped.map(f => f.name).join(', ')
+          );
+        }
       } catch (e) {
         console.error('Failed to load supported formats:', e);
       }
@@ -234,13 +338,26 @@ const App = {
       progressTimers.value.forEach(timer => clearInterval(timer));
     });
 
-    function addFiles(newFiles) {
-      const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
-      const validExtensions = ['jpg', 'jpeg', 'png', 'webp'];
+    // Whether the backend accepts this file as a conversion input, keyed on the
+    // extension. The MIME type is deliberately not consulted: it disagrees with
+    // itself for the newer formats (Windows reports .ico as image/x-icon or
+    // image/vnd.microsoft.icon depending on the shell), while the extension is
+    // unambiguous and is what the backend keys on too.
+    //
+    // Before getSupportedFormats() resolves, fall back to the list the composable
+    // ships for browser dev, so a file dropped during startup is not rejected
+    // for a format Flux does support.
+    function isSupportedInput(ext) {
+      const key = normalizeExt(ext);
+      const known = Object.keys(supportedFormats.value);
+      const accepted = known.length ? known : (fallbackFormats.input || []).map(normalizeExt);
+      return accepted.includes(key);
+    }
 
+    function addFiles(newFiles) {
       newFiles.forEach(file => {
         const ext = file.name.split('.').pop()?.toLowerCase() || '';
-        const isValid = validTypes.includes(file.type) || validExtensions.includes(ext);
+        const isValid = isSupportedInput(ext);
 
         if (isValid && !files.value.some(f => f.name === file.name && f.size === file.size)) {
           files.value.push({
@@ -266,13 +383,8 @@ const App = {
     }
 
     function getDefaultTargetFormat(inputExt) {
-      const map = {
-        jpg: 'png',
-        jpeg: 'png',
-        png: 'jpg',
-        webp: 'jpg',
-      };
-      return map[inputExt.toLowerCase()] || 'png';
+      const targets = targetsForInput(inputExt);
+      return targets[0] || 'png';
     }
 
     function removeFile(index) {
@@ -338,6 +450,7 @@ const App = {
       });
 
       let startedAnyJob = false;
+      let startedRows = [];
       for (const [targetFormat, rows] of groups) {
         try {
           // Plain {name, size, type, path} objects only - a native File object
@@ -349,23 +462,40 @@ const App = {
             type: f.type || '',
             path: f.path,
           }));
-          const result = await convert(fileObjects, targetFormat, { outputDir: outputDir.value });
+          // One job per target format, so the options are built once and shared by
+          // every row in the group. Quality is omitted entirely while nothing is
+          // overridden, leaving each format's own default in place.
+          const jobOptions = { outputDir: outputDir.value };
+          if (qualityOverride.value !== null) jobOptions.quality = qualityOverride.value;
+          if (showDitherOption.value) jobOptions.dither = dither.value;
+
+          const result = await convert(fileObjects, targetFormat, jobOptions);
 
           if (result && result.jobId) {
-            startProgressPolling(result.jobId, rows.map(f => f.id));
+            startProgressPolling(result.jobId, rows);
             startedAnyJob = true;
+            startedRows.push(...rows);
           } else if (result && result.details && result.details.outputDir) {
             // The remembered output folder is gone (deleted/renamed, or an
             // unusable value an earlier build stored): forget it so the next
             // Convert asks for a real one, instead of failing every time.
             forgetOutputDir();
             const message = 'The output folder is no longer available. Choose a folder to continue.';
+            // Only rows that have not been handed to a job yet. An earlier
+            // group may already be converting in the background, and flipping
+            // its rows to "error" would orphan a thread that is still writing
+            // files - the polling loop owns those rows until it settles.
+            const running = new Set(startedRows);
             pendingFiles.forEach(f => {
+              if (running.has(f)) return;
               f.status = 'error';
               f.error = message;
             });
             console.error('Conversion failed:', message, result.details.outputDir);
-            isConverting.value = false;
+            // A running job still reports its own rows, and its poll clears
+            // isConverting once they settle; clearing it here would let a new
+            // conversion start while that thread is still writing.
+            if (!startedAnyJob) isConverting.value = false;
             return;
           } else {
             // The API rejected the request without throwing (e.g. a validation
@@ -391,50 +521,102 @@ const App = {
       }
     }
 
-    function startProgressPolling(jobId, fileIds) {
+    function startProgressPolling(jobId, rows) {
+      // setInterval does not wait for the async callback, so a slow
+      // getProgress lets two ticks overlap. clearInterval stops *future* ticks
+      // but cannot cancel one already awaiting, so a stale "running" response
+      // could land after a terminal one and flip settled rows back to
+      // converting. `settled` is checked after every await to drop it.
+      let settled = false;
       const timer = setInterval(async () => {
+        // Any exit from the poll must stop the interval: a job is deleted from
+        // Python's registry the moment it reports a terminal state, so the next
+        // poll gets {code: 'NOT_FOUND'} with no `status` - and neither a bridge
+        // rejection nor that response matches a branch below. Leaving the timer
+        // running there wedges the UI on "Converting..." until restart.
+        const stop = () => {
+          settled = true;
+          clearInterval(timer);
+          progressTimers.value.delete(jobId);
+          checkAllComplete();
+        };
+
+        let progress;
         try {
-          const progress = await getProgress(jobId);
-          
-          if (progress.status === 'running' || progress.status === 'pending') {
-            const pct = progress.progress || 0;
-            fileIds.forEach((fid, idx) => {
-              const file = files.value.find(f => f.id === fid);
-              if (file) {
-                file.status = 'converting';
-                file.progress = pct;
-              }
-            });
-          } else if (progress.status === 'complete') {
-            fileIds.forEach((fid, idx) => {
-              const file = files.value.find(f => f.id === fid);
-              if (file) {
-                file.status = 'done';
-                file.progress = 100;
-                file.outputPath = progress.outputPaths?.[idx];
-              }
-            });
-            clearInterval(timer);
-            progressTimers.value.delete(jobId);
-            checkAllComplete();
-          } else if (progress.status === 'error') {
-            fileIds.forEach(fid => {
-              const file = files.value.find(f => f.id === fid);
-              if (file) {
-                file.status = 'error';
-                file.error = progress.error;
-              }
-            });
-            clearInterval(timer);
-            progressTimers.value.delete(jobId);
-            checkAllComplete();
-          }
+          progress = await getProgress(jobId);
         } catch (e) {
+          if (settled) return;
           console.error('Progress polling error:', e);
+          failRows(rows, 'Lost contact with the converter.');
+          stop();
+          return;
+        }
+
+        // A newer tick already reached a terminal state for this job; this
+        // response is stale and must not touch the rows.
+        if (settled) return;
+
+        const status = progress && progress.status;
+        if (status === 'running' || status === 'pending') {
+          const pct = progress.progress || 0;
+          rows.forEach(file => {
+            file.status = 'converting';
+            file.progress = pct;
+          });
+        } else if (status === 'complete') {
+          applyOutputs(rows, progress);
+          stop();
+        } else if (status === 'error') {
+          failRows(rows, (progress && progress.error) || 'Conversion failed');
+          stop();
+        } else {
+          // Unknown job, or a response shape this loop cannot interpret. The
+          // real outcome is unknowable from here, so surface it rather than
+          // polling a job id that no longer exists.
+          failRows(rows, (progress && progress.message) || 'Conversion status is unavailable.');
+          stop();
         }
       }, 200);
 
       progressTimers.value.set(jobId, timer);
+    }
+
+    // Match each output back to the row that produced it. `outputs` carries the
+    // input path alongside the output; `outputPaths` alone cannot be zipped with
+    // the rows, because it is shorter than the request whenever a file failed -
+    // positional matching then shows a successful file's path on the row that
+    // failed and leaves the real success with no path at all.
+    function applyOutputs(rows, progress) {
+      const outputs = Array.isArray(progress.outputs) ? progress.outputs : null;
+      rows.forEach((file, idx) => {
+        let outputPath;
+        if (outputs) {
+          // Same key the converter reports: the input path, or the filename for
+          // browser-dev rows that have none.
+          const key = file.path || file.name;
+          const match = outputs.find(entry => entry && entry.input === key);
+          if (!match) {
+            file.status = 'error';
+            file.error = (progress.error || 'This file did not convert.');
+            file.progress = 0;
+            return;
+          }
+          outputPath = match.output;
+        } else {
+          outputPath = (progress.outputPaths || [])[idx];
+        }
+        file.status = 'done';
+        file.progress = 100;
+        file.outputPath = outputPath;
+      });
+    }
+
+    function failRows(rows, message) {
+      rows.forEach(file => {
+        if (file.status === 'done') return;
+        file.status = 'error';
+        file.error = message;
+      });
     }
 
     function checkAllComplete() {
@@ -542,6 +724,13 @@ const App = {
       outputDir,
       isDragOver,
       isConverting,
+      showDitherOption,
+      showQualityOption,
+      qualityOverride,
+      dither,
+      handleQualityChange,
+      handleQualityReset,
+      handleDitherChange,
       hasCompleted,
       isNative,
       // Must be returned from setup(): the template hands it to FileList and
@@ -617,6 +806,16 @@ const App = {
           @clear-all="handleClearAll"
         />
       </main>
+      <ConversionOptions
+        :quality="qualityOverride"
+        :dither="dither"
+        :show-quality="showQualityOption"
+        :show-dither="showDitherOption"
+        :disabled="isConverting"
+        @update:quality="handleQualityChange"
+        @update:dither="handleDitherChange"
+        @reset-quality="handleQualityReset"
+      />
       <AppFooter
         :files="files"
         :is-converting="isConverting"

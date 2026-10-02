@@ -10,6 +10,11 @@ from typing import Callable
 class ConversionResult:
     output_paths: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # (input, output) pairs for the files that succeeded. output_paths alone
+    # cannot be mapped back onto the request: it is shorter than the input
+    # list whenever a file failed, so positional matching assigns one file's
+    # output to a different (often failed) row.
+    outputs: list[tuple[str, str]] = field(default_factory=list)
 
 
 class UnsupportedFormatError(ValueError):
