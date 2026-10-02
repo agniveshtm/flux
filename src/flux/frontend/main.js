@@ -15,6 +15,7 @@ const components = {
   FileList: window.Flux.FileList,
   FileRow: window.Flux.FileRow,
   FormatSelect: window.Flux.FormatSelect,
+  ConversionOptions: window.Flux.ConversionOptions,
   ProgressBar: window.Flux.ProgressBar,
   ThemeToggle: window.Flux.ThemeToggle,
   UpdateBell: window.Flux.UpdateBell,
@@ -27,16 +28,33 @@ Object.entries(components).forEach(([name, component]) => {
   }
 });
 
-// Which target formats each input format may be converted to. One table, used
-// both for the FormatSelect options and for the per-row default; it was
-// previously spelled out twice in main.js and again in FormatSelect.js, and the
-// inline boolean form relied on && binding tighter than || to come out right.
-const TARGETS_BY_INPUT = {
-  jpg: ['png', 'webp'],
-  jpeg: ['png', 'webp'],
-  png: ['jpg', 'webp'],
-  webp: ['jpg', 'png'],
+// Targets whose encoder takes a quality setting. Kept next to the option
+// wiring below because it is the one place that decides whether the slider is
+// worth showing; a target not listed here ignores a quality option.
+const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif']);
+
+// Extension normalization mirroring the backend's normalize_format
+// (src/flux/converter.py). The picker hands back "jpeg" for .jpeg files while
+// the backend's format list is normalized to "jpg", so a dropped photo.jpeg has
+// to be looked up under "jpg" or it matches no entry and the row renders with
+// no selectable targets.
+const normalizeExt = (ext) => {
+  const key = String(ext || '').trim().toLowerCase().replace(/^\./, '');
+  return key === 'jpeg' ? 'jpg' : key;
 };
+
+// Which target formats each input format may be converted to.
+//
+// This used to be a hardcoded TARGETS_BY_INPUT table duplicated between main.js
+// and FormatSelect.js, which meant every new format had to be added to a
+// frontend allowlist that could silently disagree with the backend encoders -
+// a format could be offered in the dropdown and then rejected by the converter,
+// or vice versa. It is now derived (see targetsForInput inside setup): every
+// declared output format is a valid target for every input format except the
+// input format itself, since re-encoding an image to the format it is already
+// in is a no-op nobody wants. getSupportedFormats() reads INPUT_FORMATS and
+// OUTPUT_FORMATS from image_converter.py, so the backend stays the single
+// source of truth.
 
 // Main App Component
 const App = {
@@ -44,15 +62,64 @@ const App = {
   components,
   setup() {
     const { theme, toggleTheme, cleanup: cleanupTheme } = window.Flux.useTheme();
-    const { convert, getProgress, getSupportedFormats, pickFiles, pickOutputDir, openOutputDir, onDroppedPaths, getFilePreview, isNative, normalizeDirPath, checkForUpdate, downloadUpdate, installUpdate, onUpdateProgress } = window.Flux.useFlux();
+    const { convert, getProgress, getSupportedFormats, fallbackFormats, pickFiles, pickOutputDir, openOutputDir, onDroppedPaths, getFilePreview, isNative, normalizeDirPath, checkForUpdate, downloadUpdate, installUpdate, onUpdateProgress } = window.Flux.useFlux();
 
     const files = ref([]);
     const supportedFormats = ref({});
+    // Every format the backend can write, and the seed for the input->target
+    // matrix below. Kept separate from supportedFormats (which is that matrix,
+    // keyed by input) because the two answer different questions.
+    const supportedOutputs = ref([]);
+
+    // The conversion matrix, derived from what the backend declares rather than
+    // hardcoded here - see the comment above the removed TARGETS_BY_INPUT.
+    // FormatSelect receives its options from this through FileRow.
+    const targetsForInput = (inputExt) => {
+      const key = normalizeExt(inputExt);
+      return supportedOutputs.value.filter(out => out !== key);
+    };
     const outputDir = ref('');
     const isDragOver = ref(false);
     const isConverting = ref(false);
     const activeJobs = ref(new Map());
     const progressTimers = ref(new Map());
+
+    // --- Conversion options -----------------------------------------------
+    // qualityOverride is null until the user actually moves the slider. Sending
+    // a quality on every conversion would silently overwrite the encoders' own
+    // defaults, and those differ per format (90 for JPG/WebP, 80 for AVIF) -
+    // a single forced number would make one of them wrong. Null means "let the
+    // format decide", and the slider renders as Default.
+    const qualityOverride = ref(null);
+    const dither = ref(true);
+
+    // The targets the pending rows will actually be converted to, which is what
+    // decides whether the quality slider and the GIF dither toggle are relevant.
+    const pendingTargets = computed(() => {
+      const targets = new Set();
+      files.value.forEach((file) => {
+        if (file.status !== 'done' && file.targetFormat) targets.add(file.targetFormat);
+      });
+      return targets;
+    });
+
+    const showQualityOption = computed(() => {
+      return [...pendingTargets.value].some((target) => LOSSY_TARGETS.has(target));
+    });
+
+    const showDitherOption = computed(() => pendingTargets.value.has('gif'));
+
+    function handleQualityChange(value) {
+      qualityOverride.value = value;
+    }
+
+    function handleQualityReset() {
+      qualityOverride.value = null;
+    }
+
+    function handleDitherChange(value) {
+      dither.value = value;
+    }
 
     // --- In-app update state -----------------------------------------------
     // updateState: checking | idle | downloading | downloaded | installing | error
@@ -201,14 +268,13 @@ const App = {
 
       try {
         const formats = await getSupportedFormats();
-        // Single source of the input->target matrix for the UI: main.js builds
-        // it, FileRow passes it to FormatSelect. FormatSelect used to repeat the
-        // same map locally, and the two could disagree silently.
+        // Single source of the input->target matrix for the UI, derived from
+        // the backend's declared formats rather than a hand-maintained table.
+        const inputs = (formats.input || []).map(normalizeExt);
+        supportedOutputs.value = (formats.output || []).map(normalizeExt);
         const mapping = {};
-        (formats.input || []).forEach(input => {
-          const key = String(input).toLowerCase();
-          const allowed = TARGETS_BY_INPUT[key] || [];
-          mapping[input] = (formats.output || []).filter(out => allowed.includes(out));
+        inputs.forEach(input => {
+          mapping[input] = targetsForInput(input);
         });
         supportedFormats.value = mapping;
       } catch (e) {
@@ -244,13 +310,26 @@ const App = {
       progressTimers.value.forEach(timer => clearInterval(timer));
     });
 
-    function addFiles(newFiles) {
-      const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
-      const validExtensions = ['jpg', 'jpeg', 'png', 'webp'];
+    // Whether the backend accepts this file as a conversion input, keyed on the
+    // extension. The MIME type is deliberately not consulted: it disagrees with
+    // itself for the newer formats (Windows reports .ico as image/x-icon or
+    // image/vnd.microsoft.icon depending on the shell), while the extension is
+    // unambiguous and is what the backend keys on too.
+    //
+    // Before getSupportedFormats() resolves, fall back to the list the composable
+    // ships for browser dev, so a file dropped during startup is not rejected
+    // for a format Flux does support.
+    function isSupportedInput(ext) {
+      const key = normalizeExt(ext);
+      const known = Object.keys(supportedFormats.value);
+      const accepted = known.length ? known : (fallbackFormats.input || []).map(normalizeExt);
+      return accepted.includes(key);
+    }
 
+    function addFiles(newFiles) {
       newFiles.forEach(file => {
         const ext = file.name.split('.').pop()?.toLowerCase() || '';
-        const isValid = validTypes.includes(file.type) || validExtensions.includes(ext);
+        const isValid = isSupportedInput(ext);
 
         if (isValid && !files.value.some(f => f.name === file.name && f.size === file.size)) {
           files.value.push({
@@ -276,7 +355,7 @@ const App = {
     }
 
     function getDefaultTargetFormat(inputExt) {
-      const targets = TARGETS_BY_INPUT[String(inputExt).toLowerCase()] || [];
+      const targets = targetsForInput(inputExt);
       return targets[0] || 'png';
     }
 
@@ -355,7 +434,14 @@ const App = {
             type: f.type || '',
             path: f.path,
           }));
-          const result = await convert(fileObjects, targetFormat, { outputDir: outputDir.value });
+          // One job per target format, so the options are built once and shared by
+          // every row in the group. Quality is omitted entirely while nothing is
+          // overridden, leaving each format's own default in place.
+          const jobOptions = { outputDir: outputDir.value };
+          if (qualityOverride.value !== null) jobOptions.quality = qualityOverride.value;
+          if (showDitherOption.value) jobOptions.dither = dither.value;
+
+          const result = await convert(fileObjects, targetFormat, jobOptions);
 
           if (result && result.jobId) {
             startProgressPolling(result.jobId, rows);
@@ -598,6 +684,13 @@ const App = {
       outputDir,
       isDragOver,
       isConverting,
+      showDitherOption,
+      showQualityOption,
+      qualityOverride,
+      dither,
+      handleQualityChange,
+      handleQualityReset,
+      handleDitherChange,
       hasCompleted,
       isNative,
       // Must be returned from setup(): the template hands it to FileList and
@@ -673,6 +766,16 @@ const App = {
           @clear-all="handleClearAll"
         />
       </main>
+      <ConversionOptions
+        :quality="qualityOverride"
+        :dither="dither"
+        :show-quality="showQualityOption"
+        :show-dither="showDitherOption"
+        :disabled="isConverting"
+        @update:quality="handleQualityChange"
+        @update:dither="handleDitherChange"
+        @reset-quality="handleQualityReset"
+      />
       <AppFooter
         :files="files"
         :is-converting="isConverting"

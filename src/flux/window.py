@@ -309,7 +309,12 @@ class FluxAPI:
         selection = window.create_file_dialog(
             dialog_type=webview.FileDialog.OPEN,
             allow_multiple=bool(multiple),
-            file_types=("Image files (*.jpg;*.jpeg;*.png;*.webp)",),
+            file_types=(
+                # Kept in step with image_converter.INPUT_FORMATS by
+                # tests/test_formats.py: a format missing here cannot be picked
+                # through the native dialog at all.
+                "Image files (*.jpg;*.jpeg;*.png;*.webp;*.ico;*.gif;*.avif)",
+            ),
         )
         # Single-select yields a bare string while multi-select yields a tuple:
         # iterating the string would otherwise produce one "path" per character.
@@ -387,6 +392,28 @@ class FluxAPI:
     # _PREVIEW_THUMB_MAX_EDGE; values <= 0 mean "as stored"). The image is
     # decoded and re-encoded at that size, so what crosses the bridge is a few
     # KB rather than the whole file.
+    # Which local files the preview bridge will decode. This is a security
+    # allowlist, not the converter's format list: the page must not be able to
+    # read arbitrary local files, and it is deliberately broader than what Flux
+    # converts (BMP/TIFF preview fine but are not conversion inputs).
+    _PREVIEW_MIME_TYPES = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".ico": "image/x-icon",
+        ".avif": "image/avif",
+        ".bmp": "image/bmp",
+        ".gif": "image/gif",
+        ".tif": "image/tiff",
+        ".tiff": "image/tiff",
+    }
+
+    @staticmethod
+    def _mime_type_for(suffix: str) -> str | None:
+        """The previewable MIME type for a file suffix, or None if not an image."""
+        return FluxAPI._PREVIEW_MIME_TYPES.get(str(suffix).lower())
+
     def getFilePreview(
         self,
         path: str | dict[str, Any] | None = None,
@@ -403,16 +430,7 @@ class FluxAPI:
         if not file_path.is_file():
             return self._error("VALIDATION_ERROR", "File does not exist.", {"path": path})
 
-        mime_type = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".webp": "image/webp",
-            ".bmp": "image/bmp",
-            ".gif": "image/gif",
-            ".tif": "image/tiff",
-            ".tiff": "image/tiff",
-        }.get(file_path.suffix.lower())
+        mime_type = self._mime_type_for(file_path.suffix)
 
         # Only known image types: the page must not be able to read arbitrary
         # local files (configs, documents, ...) through the preview bridge.

@@ -31,10 +31,10 @@ flowchart LR
 
 | Method | Arguments | Returns | Errors |
 |--------|-----------|---------|--------|
-| `convert` | `{ files: { name, size, type, path }[], targetFormat: string, options?: { outputDir: string } }` | `{ jobId: string }` | `VALIDATION_ERROR`, `UNSUPPORTED_FORMAT` |
+| `convert` | `{ files: { name, size, type, path }[], targetFormat: string, options?: { outputDir: string, quality?: number, dither?: boolean, icoSizes?: number[] } }` | `{ jobId: string }` | `VALIDATION_ERROR`, `UNSUPPORTED_FORMAT` |
 | `getProgress` | `{ jobId: string }` | `{ status: 'pending'\|'running'\|'complete'\|'error', progress: 0-100, outputPaths?: string[], outputs?: { input: string, output: string }[], error?: string }` | `NOT_FOUND` |
 | `cancel` | `{ jobId: string }` | `{ cancelled: boolean }` | `NOT_FOUND`, `ALREADY_COMPLETE` |
-| `getSupportedFormats` | — | `{ input: string[], output: string[] }` | — |
+| `getSupportedFormats` | — | `{ input: string[], output: string[] }` — the single source of truth for the UI's conversion matrix | — |
 | `pickFiles` | `{ multiple?: boolean }` | `{ paths: string[] }` | `CANCELLED` |
 | `pickOutputDir` | — | `{ path: string }` | `CANCELLED` |
 | `openOutputDir` | `{ path: string }` | `{ opened: boolean }` | `VALIDATION_ERROR`, `OPEN_ERROR` |
@@ -177,9 +177,19 @@ class BaseConverter(ABC):
     ) -> ConversionResult: ...
 ```
 
-- **Phase 1**: `PillowImageConverter` implements `BaseConverter`
+- **Phase 1.1**: `PillowImageConverter` implements `BaseConverter`, covering JPG, PNG,
+  WebP, ICO, AVIF and GIF. `INPUT_FORMATS` / `OUTPUT_FORMATS` in
+  `image_converter.py` declare what it can do, and the frontend derives its whole
+  input→target matrix from `getSupportedFormats()` — there is deliberately no
+  format table in the JS, so a format cannot be offered unless an encoder exists
+  for it. AVIF is gated on `PIL.features.check("avif")`, so a build without
+  libavif simply does not offer it.
 - **Phase 2**: `FFmpegVideoConverter` will implement same interface; frontend contract unchanged
 - **Registry**: `ConverterRegistry` maps format → converter instance; `get_converter_for_format()` selects at runtime
+- **Encoder dispatch**: `_save` rejects any target with no encoder, rather than
+  falling through to the last branch — otherwise a format added to
+  `OUTPUT_FORMATS` without an encoder would write the previous format's bytes
+  under the new extension.
 
 ## Folder Structure
 
@@ -291,7 +301,8 @@ flux/
   1. **Header** (56px): "Flux" wordmark (accent color, semibold) left; ThemeToggle + Settings icon right
   2. **DropZone** (flex-1, min 200px): Dashed border, centered content, crimson tint on drag-over, primary "Select files" button
   3. **FileList** (flex-1, scrollable): Table-like rows, each with filename, size, FormatSelect, status badge, ProgressBar, remove button
-  4. **Footer** (72px): "Convert all" (primary), "Open output folder" (ghost), output folder selector, "Clear completed"
+  4. **ConversionOptions** (auto height, conditional): Quality slider for lossy targets, GIF dithering toggle — renders nothing when no pending row targets a format that uses them
+  5. **Footer** (72px): "Convert all" (primary), "Open output folder" (ghost), output folder selector, "Clear completed"
 
 ### State Coverage
 

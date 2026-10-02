@@ -1,3 +1,17 @@
+## 2026-09-30 — AVIF via Pillow's native libavif; no `pillow-avif-plugin`
+
+- **Decision:** Encode/decode AVIF with Pillow's built-in libavif support (Pillow ≥ 11.3) instead of adding the `pillow-avif-plugin` dependency the issue suggested considering.
+- **Alternatives:** `pillow-avif-plugin`, shelling out to `avifenc`, or dropping AVIF from scope.
+- **Why:** Phase 1.1 asked for AVIF with no installer-size increase. Pillow already ships AVIF, and PyInstaller's Pillow hook bundles `PIL/_avif.pyd` (7.5 MB) into the exe whether or not we reference it — so the plugin would have added a *second* AVIF implementation and no size benefit. Verified `PIL.AvifImagePlugin` lands in the PYZ and `PIL._avif` in the binary archive of a real build. `pyproject.toml` is unchanged. The plugin also lags Pillow's native path on newer libavif features.
+- **Consequence:** AVIF availability is now capability-dependent, so `INPUT_FORMATS`/`OUTPUT_FORMATS` are computed from `PIL.features.check("avif")`. A build without libavif omits AVIF rather than offering a target it cannot write.
+
+## 2026-09-30 — Format matrix derived from the backend, not duplicated in the frontend
+
+- **Decision:** Delete the frontend's hardcoded format table and derive the input→target matrix from `getSupportedFormats()` (i.e. from `image_converter.INPUT_FORMATS`/`OUTPUT_FORMATS`).
+- **Alternatives:** Keep the hardcoded table and remember to update it; or push the whole matrix to the frontend as a new bridge call.
+- **Why:** The matrix was written out in five places (the converter, `main.js`, `FormatSelect.js`, `useFlux.js`'s dev mock, and the `pickFiles` dialog filter). Nothing made them agree, so a format could be offered in the dropdown and then rejected by the converter, or the reverse. Since `getSupportedFormats()` already returns both lists, the frontend only needs "every output format is a valid target for every input format except itself". `tests/test_formats.py` now pins the two remaining shadows — the dev mock and the pickers — to the backend lists, so drift fails CI.
+- **Consequence:** Adding a format is a backend change plus (only if a new control is needed) UI work, instead of four coordinated edits.
+
 ## 2026-09-19 — Pillow for Phase 1 image conversion
 
 - **Decision:** Use Pillow instead of bundling ImageMagick for Phase 1 image conversion.

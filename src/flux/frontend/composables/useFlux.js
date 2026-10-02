@@ -72,11 +72,16 @@ window.Flux.useFlux = function() {
   // Mock delay helper
   const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-  // Mock data for browser dev
-  const mockSupportedFormats = {
-    input: ['jpg', 'jpeg', 'png', 'webp'],
-    output: ['jpg', 'png', 'webp'],
-  };
+  // Stand-in for the backend's getSupportedFormats(), used for browser dev (there
+// is no native bridge to ask) and as the app's pre-load fallback for input
+// validation, so a file dropped while the bridge is still starting is not
+// rejected for a format Flux does support. tests/test_formats.py pins both
+// lists to image_converter.INPUT_FORMATS/OUTPUT_FORMATS so this copy cannot
+// drift away from the encoders it shadows.
+const mockSupportedFormats = {
+  input: ['jpg', 'jpeg', 'png', 'webp', 'ico', 'gif', 'avif'],
+  output: ['jpg', 'png', 'webp', 'ico', 'gif', 'avif'],
+};
 
   const mockJobs = new Map();
   let mockJobCounter = 0;
@@ -217,7 +222,7 @@ window.Flux.useFlux = function() {
       const input = document.createElement('input');
       input.type = 'file';
       input.multiple = multiple;
-      input.accept = 'image/jpeg,image/png,image/webp';
+      input.accept = 'image/jpeg,image/png,image/webp,image/x-icon,image/gif,image/avif';
       input.style.display = 'none';
       input.onchange = (e) => {
         const files = Array.from(e.target.files);
@@ -340,6 +345,7 @@ window.Flux.useFlux = function() {
     getProgress,
     cancel,
     getSupportedFormats,
+    fallbackFormats: mockSupportedFormats,
     pickFiles,
     pickOutputDir,
     openOutputDir,
