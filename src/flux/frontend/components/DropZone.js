@@ -39,9 +39,8 @@ window.Flux.DropZone = {
       >
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
       </svg>
-      <p class="text-base text-fg mb-1 text-center" v-if="!isDragOver">Drag and drop images here, or click to select</p>
-      <p class="text-base text-accent font-medium mb-1 text-center" v-else>Drop files to convert</p>
-      <p class="text-sm text-muted mb-4 text-center">Supports JPG, PNG, WebP</p>
+      <p class="text-base text-fg mb-4 text-center" v-if="!isDragOver">Drag and drop files here, or click to select</p>
+      <p class="text-base text-accent font-medium mb-4 text-center" v-else>Drop files to convert</p>
       <button
         type="button"
         class="btn-primary"
