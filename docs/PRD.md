@@ -13,6 +13,7 @@ Flux is a desktop file converter application for general consumers. It provides 
 - Work fully offline — no CDN dependencies, Vue vendored locally, Tailwind compiled via standalone CLI
 - Distribute via a single Windows installer (Inno Setup) built with PyInstaller
 - Keep conversion operations off the UI thread with progress reporting
+- Publish a project site showing what the app does, its release history and its recent activity, kept current automatically from GitHub (Phase 1.2)
 
 ## Phase 1.1 — Format support
 
@@ -49,6 +50,10 @@ Deliberate limits:
 - Batch folder processing — single/multiple file selection only
 - Advanced editing (crop, resize, filters) — conversion only
 - Plugin/extension system — fixed converter set per release
+- A separate visual identity for the site — it reuses the app's design system
+  (DECISIONS 2026-10-02)
+- An in-repo `CHANGELOG.md` — GitHub Releases is the single source, surfaced by
+  the site (DECISIONS 2026-10-02)
 
 ## User Stories / Use Cases
 
@@ -65,6 +70,8 @@ Deliberate limits:
 - Zero external network calls at runtime, except the user-visible in-app update check/download (GitHub releases)
 - Light/dark theme toggle persists across sessions
 - No UI freezing during conversions (progress reported via frontend)
+- The project site meets WCAG AA contrast in both themes, with no authenticated
+  request issued from the browser
 
 ## Phase 1.1 acceptance criteria
 
