@@ -56,9 +56,13 @@ jobs:
             --arg fetchedAt "$(cat /tmp/now.txt)" \
             '
             # Release bodies arrive as HTML; flatten to text so the page can
-            # inject it safely. A handful of entities are decoded because jq
-            # has no HTML parser.
-            def text: (gsub("<[^>]*>"; " ")
+            # inject it safely. script/style blocks are dropped whole before the
+            # tags are stripped, so their contents do not survive as text - this
+            # matches what scripts/build_cache.py does locally. A handful of
+            # entities are decoded because jq has no HTML parser.
+            def text: (gsub("<script[^>]*>[\\s\\S]*?</script>"; " ")
+                       | gsub("<style[^>]*>[\\s\\S]*?</style>"; " ")
+                       | gsub("<[^>]*>"; " ")
                        | gsub("&amp;"; "&")
                        | gsub("&lt;"; "<")
                        | gsub("&gt;"; ">")
@@ -117,4 +121,7 @@ jobs:
           # No [skip ci]: the commit that updates the cache is what triggers a
           # Pages redeploy, which is how a new release reaches the site.
           git commit -m "chore: update cache"
-          git push
+          # Pushed to an explicit branch rather than bare `git push`: a release
+          # event checks out the tag, so HEAD is detached and a bare push fails
+          # with "fatal: You are not currently on a branch."
+          git push origin HEAD:main

@@ -13,6 +13,9 @@ on:
     paths:
       - "docs/**"
       - "src/flux/assets/**"
+      # The site loads the app's vendored font, so a font-only change has to
+      # rebuild it too.
+      - "src/flux/frontend/assets/fonts/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 

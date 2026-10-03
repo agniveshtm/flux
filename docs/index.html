@@ -355,7 +355,7 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
         the only network request it ever makes is the optional update check.
       </p>
       <div class="hero-actions">
-        <a class="btn btn-primary" href="https://github.com/agniveshtm/flux/releases/latest" download>
+        <a class="btn btn-primary" id="download-btn" href="https://github.com/agniveshtm/flux/releases/latest" rel="noopener">
           <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/>
           </svg>
@@ -549,6 +549,7 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
     var factVersion = document.getElementById('fact-version');
     var factArtifacts = document.getElementById('fact-artifacts');
     var versionBadge = document.querySelector('.badge-accent');
+    var downloadBtn = document.getElementById('download-btn');
 
     function getJSON(url) {
       return fetch(url, { headers: { Accept: 'application/vnd.github+json' } })
@@ -581,18 +582,22 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
     }
 
     function normalise(d, fromApi) {
+      var releases = (d.releases || []).map(function (r) {
+        return {
+          version: (r.tag || r.tag_name || '').replace(/^v/i, ''),
+          tag: r.tag || r.tag_name || '',
+          name: r.name || '',
+          published: r.published || r.published_at || '',
+          url: r.url || r.html_url || '',
+          body: fromApi ? stripHTML(r.body) : (r.body || ''),
+        };
+      }).filter(function (r) { return /^v?\d/.test(r.tag || ''); });
+
       return {
-        latest: d.latest || '',
-        releases: (d.releases || []).map(function (r) {
-          return {
-            version: (r.tag || r.tag_name || '').replace(/^v/i, ''),
-            tag: r.tag || r.tag_name || '',
-            name: r.name || '',
-            published: r.published || r.published_at || '',
-            url: r.url || r.html_url || '',
-            body: fromApi ? stripHTML(r.body) : (r.body || ''),
-          };
-        }),
+        // Derived when absent, so the API fallback - which carries no `latest`
+        // field - still fills the version badge and the artifact names.
+        latest: d.latest || (releases.length ? releases[0].version : ''),
+        releases: releases,
         commits: (d.commits || []).map(function (c) {
           return { sha: c.sha, subject: c.subject || '', date: c.date || '', url: c.url || '' };
         }),
@@ -634,7 +639,7 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
     }
 
     function render(data, source) {
-      var releases = data.releases.filter(function (r) { return /^v?\d/.test(r.tag || ''); });
+      var releases = data.releases;
 
       changelogLog.textContent = '';
       if (!releases.length) {
@@ -682,6 +687,13 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
         versionBadge.textContent = 'v' + data.latest;
         factVersion.textContent = data.latest;
         factArtifacts.textContent = 'flux.exe, flux-setup-' + data.latest + '.exe, .sha256';
+
+        // Point the button at the installer asset rather than the releases
+        // page. The asset is named for the version, so this can only be built
+        // once the version is known; until then it stays on the releases list,
+        // which is a page rather than a download either way.
+        downloadBtn.href = 'https://github.com/agniveshtm/flux/releases/download/v' +
+          data.latest + '/flux-setup-' + data.latest + '.exe';
       }
     }
 
