@@ -555,12 +555,29 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
     }
 
-    // The cache stores release bodies as plain text already; the API returns
-    // HTML, so the fallback flattens it here instead.
+    // The cache stores release bodies as plain text already; the REST API
+    // returns HTML, so the fallback flattens it here.
+    //
+    // DOMParser rather than innerHTML: it builds an *inert* document, where
+    // scripts never execute and no resources are fetched. Assigning untrusted
+    // HTML to innerHTML does not run <script>, but it does fetch <img src>,
+    // so an <img src=x onerror=...> in a release body would execute. Stripping
+    // tags with a regular expression is not a substitute - that is what
+    // CodeQL's js/incomplete-multi-character-sanitization flags, correctly,
+    // since a payload can re-form a tag the single pass removed.
+    //
+    // The result is only ever read as text: renderBody builds elements and
+    // assigns textContent, never markup.
     function stripHTML(html) {
-      var d = document.createElement('div');
-      d.innerHTML = String(html || '').replace(/<(script|style)[\s\S]*?<\/\1>/gi, '');
-      return (d.innerText || d.textContent || '').replace(/\r/g, '');
+      var doc = new DOMParser().parseFromString(
+        '<!doctype html><html><body>' + String(html || '') + '</body></html>',
+        'text/html'
+      );
+      // Their text content is not something a reader wants to see.
+      var noise = doc.querySelectorAll('script, style, template');
+      for (var i = 0; i < noise.length; i++) noise[i].remove();
+      var body = doc.body;
+      return ((body && (body.innerText || body.textContent)) || '').replace(/\r/g, '');
     }
 
     function normalise(d, fromApi) {
