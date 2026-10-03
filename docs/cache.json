@@ -1,0 +1,148 @@
+{
+  "source": "rest",
+  "repo": "agniveshtm/flux",
+  "fetchedAt": "2026-10-03T05:14:43+00:00",
+  "latest": "0.2.0",
+  "releases": [
+    {
+      "tag": "v0.2.0",
+      "version": "0.2.0",
+      "name": "Release v0.2.0",
+      "published": "2026-10-02T12:28:51Z",
+      "url": "https://github.com/agniveshtm/flux/releases/tag/v0.2.0",
+      "prerelease": false,
+      "body": "## What's Changed\n* chore(deps-dev): update uv-build requirement from =0.12.17 to >=0.12.19,<0.13.0 by @dependabot[bot] in https://github.com/agniveshtm/flux/pull/5\n* Phase 1.1: add ICO, AVIF, GIF; fix output mapping and progress polling by @agniveshtm in https://github.com/agniveshtm/flux/pull/6\n\n## New Contributors\n* @dependabot[bot] made their first contribution in https://github.com/agniveshtm/flux/pull/5\n\n**Full Changelog**: https://github.com/agniveshtm/flux/compare/v0.1.0...v0.2.0"
+    },
+    {
+      "tag": "v0.1.0",
+      "version": "0.1.0",
+      "name": "Release v0.1.0",
+      "published": "2026-09-25T18:54:57Z",
+      "url": "https://github.com/agniveshtm/flux/releases/tag/v0.1.0",
+      "prerelease": false,
+      "body": "## What's Changed\n* feat: deliver Flux file converter MVP with Vue 3 UI, Python backend, and pywebview shell by @agniveshtm in https://github.com/agniveshtm/flux/pull/1\n* feat: release pipeline with auto-updater, CI workflows, and documentation by @agniveshtm in https://github.com/agniveshtm/flux/pull/2\n* fix(app): resolve bundled frontend path in the packaged exe by @agniveshtm in https://github.com/agniveshtm/flux/pull/3\n\n## New Contributors\n* @agniveshtm made their first contribution in https://github.com/agniveshtm/flux/pull/1\n\n**Full Changelog**: https://github.com/agniveshtm/flux/commits/v0.1.0"
+    }
+  ],
+  "commits": [
+    {
+      "sha": "11a3868",
+      "subject": "fix(test): make the install tests run on the Linux CI runner",
+      "date": "2026-10-02T12:22:26Z",
+      "url": "https://github.com/agniveshtm/flux/commit/11a386879d43a284e7b3e95418d6004ddb4f0dfb"
+    },
+    {
+      "sha": "5438ca9",
+      "subject": "fix(app): launch the update installer fully unattended",
+      "date": "2026-10-02T12:04:56Z",
+      "url": "https://github.com/agniveshtm/flux/commit/5438ca99da4223d8fd1dbc92b17941f89c0bd395"
+    },
+    {
+      "sha": "2d7f185",
+      "subject": "chore(project): bump version to 0.2.0",
+      "date": "2026-10-02T11:06:34Z",
+      "url": "https://github.com/agniveshtm/flux/commit/2d7f1855b6bdcc9c99483ae4e0454cb952b63d6d"
+    },
+    {
+      "sha": "e743ce0",
+      "subject": "Merge pull request #6 from agniveshtm/feature",
+      "date": "2026-10-02T10:54:12Z",
+      "url": "https://github.com/agniveshtm/flux/commit/e743ce0ee1f6c041debb8348309be4baa81502d3"
+    },
+    {
+      "sha": "d586c00",
+      "subject": "fix(app): resolve Phase 1.1 code review findings",
+      "date": "2026-10-02T06:40:21Z",
+      "url": "https://github.com/agniveshtm/flux/commit/d586c002197a6597dd25f55e1dfb077ff477d2be"
+    },
+    {
+      "sha": "39f8f84",
+      "subject": "fix(app): rebuild app.css after the drop zone copy change",
+      "date": "2026-10-02T04:32:41Z",
+      "url": "https://github.com/agniveshtm/flux/commit/39f8f840b165e1916bc74ea8567b3cee12a074b5"
+    },
+    {
+      "sha": "408f136",
+      "subject": "fix(app): correct drop zone wording and stale format list",
+      "date": "2026-10-02T04:26:58Z",
+      "url": "https://github.com/agniveshtm/flux/commit/408f13621699791e31f3da951fec9899b332afea"
+    },
+    {
+      "sha": "b48cd95",
+      "subject": "Merge pull request #5 from agniveshtm/dependabot/uv/uv-build-gte-0.12.19-and-lt-0.13.0",
+      "date": "2026-10-02T02:20:56Z",
+      "url": "https://github.com/agniveshtm/flux/commit/b48cd9588d8861af5b423349e2a7b452a60dd57d"
+    },
+    {
+      "sha": "801deaf",
+      "subject": "feat(app): support ICO, AVIF and GIF conversions",
+      "date": "2026-10-02T02:20:15Z",
+      "url": "https://github.com/agniveshtm/flux/commit/801deaf6553df9be8fca5c3983ab6a49bc062d4b"
+    },
+    {
+      "sha": "906054d",
+      "subject": "chore(deps-dev): update uv-build requirement",
+      "date": "2026-09-29T12:24:55Z",
+      "url": "https://github.com/agniveshtm/flux/commit/906054dddac2774ae02c869a7e90bf4ea13ff030"
+    },
+    {
+      "sha": "309063e",
+      "subject": "fix(app): fix output mapping, polling wedge, and preview memory growth",
+      "date": "2026-09-29T02:29:40Z",
+      "url": "https://github.com/agniveshtm/flux/commit/309063e401add9f16a2927b0d8b63529c5484ec5"
+    },
+    {
+      "sha": "740360c",
+      "subject": "Merge pull request #3 from agniveshtm/feature",
+      "date": "2026-09-25T18:40:08Z",
+      "url": "https://github.com/agniveshtm/flux/commit/740360c6ac868f9cae5c1e8dfe40c8f0384275fc"
+    },
+    {
+      "sha": "01cbc26",
+      "subject": "fix(app): resolve bundled frontend path in the packaged exe",
+      "date": "2026-09-25T18:21:54Z",
+      "url": "https://github.com/agniveshtm/flux/commit/01cbc2662fb62be192c3dce3e5de488034d0e9dd"
+    },
+    {
+      "sha": "06685fa",
+      "subject": "docs(project): update README",
+      "date": "2026-09-25T17:24:32Z",
+      "url": "https://github.com/agniveshtm/flux/commit/06685fa2a4dfb94b7f907aa241e64494d372d10b"
+    },
+    {
+      "sha": "9011a16",
+      "subject": "Merge pull request #2 from agniveshtm/feature",
+      "date": "2026-09-25T16:57:01Z",
+      "url": "https://github.com/agniveshtm/flux/commit/9011a162193e42261a796ef7e05d358e55a3860b"
+    },
+    {
+      "sha": "1817e59",
+      "subject": "fix(app): address PR #2 review findings across updater, UI, and CI",
+      "date": "2026-09-25T01:52:32Z",
+      "url": "https://github.com/agniveshtm/flux/commit/1817e59b7180c682a20e2772af8ea3811b665c29"
+    },
+    {
+      "sha": "ad39060",
+      "subject": "docs(project): add README and MIT license",
+      "date": "2026-09-24T18:05:34Z",
+      "url": "https://github.com/agniveshtm/flux/commit/ad390602f55bd90905955378b2e76da1f5040901"
+    },
+    {
+      "sha": "8301b5f",
+      "subject": "ci(test): add workflow for pytest, frontend, CSS and installer checks",
+      "date": "2026-09-24T17:57:59Z",
+      "url": "https://github.com/agniveshtm/flux/commit/8301b5f3f660365a4673676562a964d4fa80a9c0"
+    },
+    {
+      "sha": "14ca36c",
+      "subject": "feat(app): add release pipeline and in-app update downloader",
+      "date": "2026-09-24T17:45:34Z",
+      "url": "https://github.com/agniveshtm/flux/commit/14ca36c99981fbec4192377fc6fdda1c6e50cbe9"
+    },
+    {
+      "sha": "9003a88",
+      "subject": "Merge pull request #1 from agniveshtm/feature",
+      "date": "2026-09-23T15:46:54Z",
+      "url": "https://github.com/agniveshtm/flux/commit/9003a88590fddc8ec82e49921f5aa53fbe975fe0"
+    }
+  ]
+}

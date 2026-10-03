@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flux - Image Converter for Windows</title>
+<meta name="description" content="Flux is an offline-first desktop image converter for Windows. Convert between JPG, PNG, WebP, ICO, AVIF and GIF in both directions.">
+<link rel="icon" href="../src/flux/assets/logo.svg" type="image/svg+xml">
+<link rel="preload" href="../src/flux/frontend/assets/fonts/Inter-Variable.ttf" as="font" type="font/ttf" crossorigin>
+<style>
+/* Tokens are copied verbatim from src/flux/frontend/assets/input.css so this
+   page and the desktop app cannot drift apart. */
+@font-face {
+  font-family: 'Inter';
+  src: url('../src/flux/frontend/assets/fonts/Inter-Variable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+  font-style: normal;
+}
+
+:root {
+  --color-bg: #FAFAFA;
+  --color-surface: #FFFFFF;
+  --color-surface-2: #F4F4F5;
+  --color-border: #E4E4E7;
+  --color-text: #0B0B0D;
+  --color-muted: #52525B;
+  --color-accent: #DC143C;
+  --color-accent-hover: #B8102F;
+  --color-accent-active: #970D26;
+  --color-accent-tint: rgba(220, 20, 60, 0.12);
+  --color-success: #22C55E;
+}
+
+.dark {
+  --color-bg: #0B0B0D;
+  --color-surface: #141417;
+  --color-surface-2: #1C1C21;
+  --color-border: #2A2A30;
+  --color-text: #F4F4F5;
+  --color-muted: #A1A1AA;
+  --color-accent: #DC143C;
+  --color-accent-hover: #B8102F;
+  --color-accent-active: #970D26;
+  --color-accent-tint: rgba(220, 20, 60, 0.12);
+  --color-success: #22C55E;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.5;
+  margin: 0;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-accent);
+  border-radius: 0.375rem;
+}
+
+::selection { background-color: var(--color-accent-tint); color: var(--color-accent); }
+
+.wrap { width: 100%; max-width: 880px; margin: 0 auto; padding: 0 1.5rem; }
+
+/* --- header: the app's header, minus the window chrome --- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background-color: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+}
+.site-header .wrap {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.wordmark { display: flex; align-items: center; gap: 0.625rem; text-decoration: none; color: inherit; }
+/* Height only: the logo PNGs are portrait (251x290), so setting width as well
+   would stretch them ~15% sideways. The SVG is square, which is why this only
+   showed up after switching to the PNGs. object-fit is a second guard. */
+.wordmark img { height: 28px; width: auto; object-fit: contain; display: block; }
+.wordmark span { font-size: 1.125rem; font-weight: 600; letter-spacing: -0.01em; }
+
+.nav { margin-left: auto; display: flex; align-items: center; gap: 0.25rem; }
+.nav a {
+  color: var(--color-muted);
+  text-decoration: none;
+  font-size: 0.875rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.nav a:hover { color: var(--color-text); background-color: var(--color-surface-2); }
+
+/* --- buttons: .btn-primary / .btn-ghost from the app --- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.btn-primary { background-color: var(--color-accent); color: #FFFFFF; }
+.btn-primary:hover { background-color: var(--color-accent-hover); }
+.btn-primary:active { background-color: var(--color-accent-active); }
+.btn-ghost { background-color: transparent; color: var(--color-text); }
+.btn-ghost:hover { background-color: var(--color-surface-2); }
+.btn-ghost:active { background-color: var(--color-surface-2); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.icon-btn { padding: 0.5rem; border-radius: 0.5rem; }
+.icon-btn svg { width: 20px; height: 20px; display: block; }
+/* Driven by the theme rather than the `hidden` attribute: `hidden` is an
+   HTMLElement property, and setting it on an <svg> did not reliably remove the
+   element - both icons ended up hidden at once. CSS on the theme class cannot
+   go wrong and needs no JavaScript. */
+#icon-moon { display: block; }
+#icon-sun { display: none; }
+.dark #icon-moon { display: none; }
+.dark #icon-sun { display: block; }
+
+/* --- hero --- */
+.hero { padding: 4.5rem 0 3.5rem; border-bottom: 1px solid var(--color-border); }
+.hero-logo { height: 72px; width: auto; object-fit: contain; display: block; margin-bottom: 1.5rem; }
+.hero h1 {
+  font-size: 2.75rem;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+  margin: 0 0 1rem;
+}
+.hero p { font-size: 1.125rem; color: var(--color-muted); margin: 0 0 2rem; max-width: 56ch; }
+.hero-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: 9999px;
+  padding: 0.125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background-color: var(--color-surface-2);
+  color: var(--color-muted);
+  border: 1px solid var(--color-border);
+}
+.badge-accent { background-color: var(--color-accent); color: #FFFFFF; border-color: transparent; }
+
+/* --- sections --- */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--color-border); }
+section:last-of-type { border-bottom: none; }
+
+/* Crimson #DC143C cannot carry small text: it reaches 3.9:1 on the dark
+   background and 3.7:1 on its own tint, both under the 4.5:1 AA threshold for
+   body-size text. So it stays on buttons, borders, focus rings and the release
+   dots - where it needs only 3:1 - and every label uses --color-text or
+   --color-muted, both of which clear 6.5:1 in both themes. The accent bar below
+   keeps the crimson visible without putting it on a glyph. */
+.eyebrow {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  margin: 0 0 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.eyebrow::before {
+  content: '';
+  width: 2px;
+  height: 0.875rem;
+  background-color: var(--color-accent);
+  border-radius: 1px;
+}
+h2 { font-size: 1.5rem; letter-spacing: -0.02em; font-weight: 600; margin: 0 0 0.75rem; }
+.section-lede { color: var(--color-muted); margin: 0 0 2rem; max-width: 62ch; }
+
+.feature-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25rem; }
+.feature-list li { display: grid; grid-template-columns: 20px 1fr; gap: 0.875rem; align-items: start; }
+.feature-list svg { width: 20px; height: 20px; color: var(--color-accent); margin-top: 2px; }
+.feature-list strong { display: block; font-weight: 600; margin-bottom: 0.125rem; }
+.feature-list span { color: var(--color-muted); font-size: 0.9375rem; }
+
+/* --- format matrix: the product's thesis, rendered as data --- */
+.matrix-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table.matrix { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 0.8125rem; }
+.matrix th, .matrix td { padding: 0.5rem 0.625rem; text-align: center; border: 1px solid var(--color-border); }
+.matrix thead th { background-color: var(--color-surface-2); font-weight: 600; }
+.matrix tbody th { background-color: var(--color-surface-2); font-weight: 600; text-align: left; white-space: nowrap; }
+/* The "ok" cells were green text, which measured 2.07:1 on the light
+   surface-2 - unreadable. The tick is set in --color-text instead; the diagonal
+   is distinguished by its dash and tint rather than by colour alone, so the
+   table still reads without relying on hue. */
+.matrix td { font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace; color: var(--color-text); }
+.matrix td.self { color: var(--color-muted); background-color: var(--color-surface-2); }
+.matrix-note { font-size: 0.8125rem; color: var(--color-muted); margin: 1rem 0 0; }
+
+/* --- changelog --- */
+.log-status { color: var(--color-muted); font-size: 0.875rem; margin: 0 0 1.5rem; }
+.log-status[hidden] { display: none; }
+.log-entry { margin-bottom: 2.5rem; }
+.log-entry:last-child { margin-bottom: 0; }
+.log-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.625rem;
+  margin-bottom: 0.875rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.log-head h3 { font-size: 1.0625rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.log-tag {
+  font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.log-tag:hover { color: var(--color-text); border-bottom-color: var(--color-border); }
+.log-head time { font-size: 0.8125rem; color: var(--color-muted); font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace; margin-left: auto; }
+.log-body { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.log-body li { color: var(--color-muted); font-size: 0.9375rem; padding-left: 1rem; position: relative; }
+.log-body li::before { content: ''; position: absolute; left: 0; top: 0.6875em; width: 4px; height: 4px; border-radius: 9999px; background-color: var(--color-accent); }
+.log-body strong { color: var(--color-text); font-weight: 600; }
+.log-body p { margin: 0; }
+.log-body h1, .log-body h2, .log-body h3 { font-size: 0.9375rem; font-weight: 600; margin: 0.5rem 0 0; }
+
+/* --- commits --- */
+.commits { font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace; font-size: 0.8125rem; }
+.commit { display: grid; grid-template-columns: 7ch 1fr; gap: 0.875rem; padding: 0.625rem 0; border-bottom: 1px solid var(--color-border); }
+.commit:last-child { border-bottom: none; }
+.commit .sha { color: var(--color-muted); text-decoration: none; }
+.commit a.sha:hover { color: var(--color-text); text-decoration: underline; }
+.commit .subject { color: var(--color-text); overflow-wrap: anywhere; }
+.commit .scope { color: var(--color-muted); }
+
+dl.facts { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 0.5rem 1.5rem; font-size: 0.9375rem; }
+dl.facts dt { color: var(--color-muted); }
+dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace; }
+
+/* --- footer --- */
+.site-footer { padding: 2.5rem 0 3rem; border-top: 1px solid var(--color-border); color: var(--color-muted); font-size: 0.875rem; }
+.site-footer .wrap { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+.site-footer a { color: var(--color-muted); }
+.site-footer a:hover { color: var(--color-accent); }
+.site-footer .spacer { margin-left: auto; }
+
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 20;
+  background-color: var(--color-surface); color: var(--color-text);
+  padding: 0.75rem 1rem; border-radius: 0 0 0.5rem 0; text-decoration: none;
+}
+.skip-link:focus { left: 0; }
+
+@media (max-width: 640px) {
+  html { font-size: 15px; }
+  .nav { display: none; }
+  .hero { padding: 3rem 0 2.5rem; }
+  .hero h1 { font-size: 2.125rem; }
+  .hero p { font-size: 1rem; }
+  section { padding: 2.5rem 0; }
+  .btn { min-height: 44px; }
+  .icon-btn { min-height: 44px; min-width: 44px; }
+  dl.facts { grid-template-columns: 1fr; gap: 0.125rem 0; }
+  dl.facts dd { margin-bottom: 0.5rem; }
+}
+</style>
+<script>
+  // Same key and same anti-flash approach as the app's index.html, so this page
+  // and the desktop app agree on which theme the user chose.
+  (function () {
+    var STORAGE_KEY = 'flux-theme';
+    var stored = localStorage.getItem(STORAGE_KEY);
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var theme = (stored === 'light' || stored === 'dark') ? stored : (prefersDark ? 'dark' : 'light');
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    }
+  })();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="wordmark" href="#top">
+      <img id="logo-header" src="../src/flux/assets/logo-dark.png" alt="">
+      <span>Flux</span>
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#formats">Formats</a>
+      <a href="#changelog">Changelog</a>
+      <a href="#commits">Commits</a>
+    </nav>
+    <button
+      type="button"
+      class="btn btn-ghost icon-btn"
+      id="theme-toggle"
+      aria-label="Switch to dark mode"
+      title="Switch to dark mode"
+    >
+      <svg id="icon-moon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+      </svg>
+      <svg id="icon-sun" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<main id="main">
+
+  <div class="hero" id="top">
+    <div class="wrap">
+      <img class="hero-logo" id="logo-hero" src="../src/flux/assets/logo-dark.png" alt="Flux logo">
+      <h1>Convert images without sending them anywhere.</h1>
+      <p>
+        Flux is a Windows desktop converter for JPG, PNG, WebP, ICO, AVIF and GIF -
+        every format converting to every other. It runs entirely on your machine:
+        the only network request it ever makes is the optional update check.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="https://github.com/agniveshtm/flux/releases/latest" download>
+          <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/>
+          </svg>
+          Download the installer
+        </a>
+        <span class="badge badge-accent">v0.2.0</span>
+        <span class="badge">Windows only</span>
+      </div>
+    </div>
+  </div>
+
+  <section id="overview">
+    <div class="wrap">
+      <p class="eyebrow">Overview</p>
+      <h2>What it does</h2>
+      <p class="section-lede">
+        Drop in a folder of images, pick a target per row, and convert the lot in
+        one pass. Progress is per-file, so a batch that partly fails still tells
+        you which files made it.
+      </p>
+      <ul class="feature-list">
+        <li>
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3l14 9-14 9V3z"/></svg>
+          <div><strong>Batch conversion</strong><span>Queue as many files as you like; rows are grouped by target format and each finishes with its own status.</span></div>
+        </li>
+        <li>
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5h16M4 12h16M4 19h16"/></svg>
+          <div><strong>Six formats, both directions</strong><span>JPG, PNG, WebP, ICO, AVIF and GIF. The backend declares what it can write, so the app never offers a target it cannot produce.</span></div>
+        </li>
+        <li>
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 12h16M12 4v16"/></svg>
+          <div><strong>Conversion options where they matter</strong><span>A quality slider for lossy targets and a dithering toggle for GIF, shown only when a pending row targets a format that uses them.</span></div>
+        </li>
+        <li>
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5.5A1.5 1.5 0 015.5 4h13A1.5 1.5 0 0120 5.5v13a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 18.5v-13zM4 15l4-4 3 3 5-5 4 4"/></svg>
+          <div><strong>Icons and animation handled properly</strong><span>ICO output carries 16, 32, 48 and 256px frames at once, square-padded with real transparency. Animated sources keep every frame, its duration and its disposal when written to GIF.</span></div>
+        </li>
+        <li>
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v18M3 12h18"/></svg>
+          <div><strong>Colour profiles preserved</strong><span>AVIF output carries the source ICC and XMP data rather than silently reinterpreting it as sRGB.</span></div>
+        </li>
+        <li>
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+          <div><strong>Offline-first</strong><span>No CDN, no telemetry, no uploads. Vue, Tailwind and Inter are all shipped inside the installer.</span></div>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="formats">
+    <div class="wrap">
+      <p class="eyebrow">Formats</p>
+      <h2>Thirty conversion paths</h2>
+      <p class="section-lede">
+        Every format converts to every other - 30 pairs, all verified. Converting
+        an image to the format it is already in is not offered, because
+        re-encoding it changes nothing.
+      </p>
+      <div class="matrix-scroll">
+        <table class="matrix">
+          <caption class="matrix-note" style="text-align:left;padding:0 0 0.5rem;caption-side:top">
+            Rows are the source format, columns the target. A dash means that pair
+            is not offered because the formats match.
+          </caption>
+          <thead>
+            <tr><th scope="col">From \ To</th><th scope="col">JPG</th><th scope="col">PNG</th><th scope="col">WebP</th><th scope="col">ICO</th><th scope="col">AVIF</th><th scope="col">GIF</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">JPG</th><td class="self">&#8211;</td><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td></tr>
+            <tr><th scope="row">PNG</th><td>&#10003;</td><td class="self">&#8211;</td><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td></tr>
+            <tr><th scope="row">WebP</th><td>&#10003;</td><td>&#10003;</td><td class="self">&#8211;</td><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td></tr>
+            <tr><th scope="row">ICO</th><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td><td class="self">&#8211;</td><td>&#10003;</td><td>&#10003;</td></tr>
+            <tr><th scope="row">AVIF</th><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td><td class="self">&#8211;</td><td>&#10003;</td></tr>
+            <tr><th scope="row">GIF</th><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td><td>&#10003;</td><td class="self">&#8211;</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="matrix-note">
+        Transparent formats stay transparent everywhere they can: PNG, WebP, ICO,
+        AVIF and GIF all carry alpha. JPG flattens it onto white, because JPEG has
+        no alpha channel to flatten into.
+      </p>
+    </div>
+  </section>
+
+  <section id="changelog">
+    <div class="wrap">
+      <p class="eyebrow">Changelog</p>
+      <h2>Release log</h2>
+      <p class="section-lede">
+        Read from the project's GitHub releases, newest first. Refreshed by a
+        workflow when a release is published and once a day in between, so this
+        is the actual history rather than a copy that can drift.
+      </p>
+
+      <p class="log-status" id="changelog-status" role="status">Loading releases…</p>
+      <div id="changelog-log"></div>
+    </div>
+  </section>
+
+  <section id="commits">
+    <div class="wrap">
+      <p class="eyebrow">Commits</p>
+      <h2>Recent activity</h2>
+      <p class="section-lede">
+        The latest commits on the default branch. Refreshed by the same workflow,
+        so merged work shows up here without anyone editing the page.
+      </p>
+
+      <p class="log-status" id="commits-status" role="status">Loading commits…</p>
+      <div class="commits" id="commit-log"></div>
+    </div>
+  </section>
+
+  <section id="release">
+    <div class="wrap">
+      <p class="eyebrow">Release</p>
+      <h2>At a glance</h2>
+      <dl class="facts">
+        <dt>Latest version</dt><dd id="fact-version">—</dd>
+        <dt>Artifacts</dt><dd id="fact-artifacts">—</dd>
+        <dt>Platform</dt><dd>Windows (x64)</dd>
+        <dt>Runtime dependencies</dt><dd>Pillow, pywebview</dd>
+        <dt>Formats</dt><dd>6 read/write, 30 conversion pairs</dd>
+        <dt>Repository</dt><dd>agniveshtm/flux</dd>
+      </dl>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span>Flux 0.2.0</span>
+    <a href="https://github.com/agniveshtm/flux">GitHub</a>
+    <a href="https://github.com/agniveshtm/flux/releases">Releases</a>
+    <a href="https://github.com/agniveshtm/flux/issues">Report an issue</a>
+    <span class="spacer"></span>
+    <span>MIT licensed</span>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var toggle = document.getElementById('theme-toggle');
+    var logos = [
+      document.getElementById('logo-header'),
+      document.getElementById('logo-hero')
+    ];
+
+    // Same pairing as Branding.js in the app: the light artwork is for dark
+    // backgrounds and vice versa, because the names describe the logo's ink,
+    // not the theme it belongs to.
+    var LOGO = { light: '../src/flux/assets/logo-light.png', dark: '../src/flux/assets/logo-dark.png' };
+
+    function isDark() {
+      return document.documentElement.classList.contains('dark');
+    }
+
+    function render() {
+      var dark = isDark();
+      var label = dark ? 'Switch to light mode' : 'Switch to dark mode';
+      toggle.setAttribute('aria-label', label);
+      toggle.setAttribute('title', label);
+      // The sun/moon swap is handled entirely in CSS via the .dark class.
+      logos.forEach(function (logo) { logo.src = LOGO[dark ? 'light' : 'dark']; });
+    }
+
+    toggle.addEventListener('click', function () {
+      document.documentElement.classList.toggle('dark');
+      localStorage.setItem('flux-theme', isDark() ? 'dark' : 'light');
+      render();
+    });
+
+    render();
+  })();
+
+  // --- releases and commits -------------------------------------------------
+  // Reads docs/cache.json, which .github/workflows/update-cache.yml regenerates
+  // hourly, on every release publish, and on manual dispatch. Same shape as the
+  // Portfolio site's cache.json.
+  //
+  // REST rather than GraphQL: GraphQL needs a token, and a token shipped in
+  // browser JavaScript is readable by anyone who views source.
+  (function () {
+    var API = 'https://api.github.com/repos/agniveshtm/flux';
+
+    var changelogLog = document.getElementById('changelog-log');
+    var changelogStatus = document.getElementById('changelog-status');
+    var commitLog = document.getElementById('commit-log');
+    var commitsStatus = document.getElementById('commits-status');
+    var factVersion = document.getElementById('fact-version');
+    var factArtifacts = document.getElementById('fact-artifacts');
+    var versionBadge = document.querySelector('.badge-accent');
+
+    function getJSON(url) {
+      return fetch(url, { headers: { Accept: 'application/vnd.github+json' } })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    }
+
+    // The cache stores release bodies as plain text already; the API returns
+    // HTML, so the fallback flattens it here instead.
+    function stripHTML(html) {
+      var d = document.createElement('div');
+      d.innerHTML = String(html || '').replace(/<(script|style)[\s\S]*?<\/\1>/gi, '');
+      return (d.innerText || d.textContent || '').replace(/\r/g, '');
+    }
+
+    function normalise(d, fromApi) {
+      return {
+        latest: d.latest || '',
+        releases: (d.releases || []).map(function (r) {
+          return {
+            version: (r.tag || r.tag_name || '').replace(/^v/i, ''),
+            tag: r.tag || r.tag_name || '',
+            name: r.name || '',
+            published: r.published || r.published_at || '',
+            url: r.url || r.html_url || '',
+            body: fromApi ? stripHTML(r.body) : (r.body || ''),
+          };
+        }),
+        commits: (d.commits || []).map(function (c) {
+          return { sha: c.sha, subject: c.subject || '', date: c.date || '', url: c.url || '' };
+        }),
+      };
+    }
+
+    function fmtDate(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      if (isNaN(d)) return String(iso).slice(0, 10);
+      return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text !== undefined && text !== null) n.textContent = text;
+      return n;
+    }
+
+    // A release body is GitHub's own message: markdown bullets, blank-line
+    // separated paragraphs, and **bold** leads. Rendered as elements, never as
+    // innerHTML, so a release body can never inject markup.
+    function renderBody(text) {
+      var ul = el('ul', 'log-body');
+      String(text || '').split('\n').forEach(function (raw) {
+        var line = raw.trim();
+        if (!line) return;
+        var li = el('li');
+        line.replace(/^[-*]\s+/, '')
+            .split(/\*\*(.+?)\*\*/)
+            .forEach(function (part, i) {
+              if (i % 2 === 1) li.appendChild(el('strong', null, part));
+              else if (part) li.appendChild(document.createTextNode(part));
+            });
+        ul.appendChild(li);
+      });
+      return ul.childNodes.length ? ul : null;
+    }
+
+    function render(data, source) {
+      var releases = data.releases.filter(function (r) { return /^v?\d/.test(r.tag || ''); });
+
+      changelogLog.textContent = '';
+      if (!releases.length) {
+        changelogStatus.textContent = 'No published releases yet.';
+      } else {
+        releases.forEach(function (r) {
+          var entry = el('article', 'log-entry');
+          var head = el('div', 'log-head');
+          head.appendChild(el('h3', null, r.name || ('Version ' + r.version)));
+          if (r.url) {
+            var a = el('a', 'log-tag', r.tag);
+            a.href = r.url;
+            a.rel = 'noopener';
+            head.appendChild(a);
+          }
+          var t = el('time', null, fmtDate(r.published));
+          if (r.published) t.dateTime = r.published;
+          head.appendChild(t);
+          entry.appendChild(head);
+          var body = renderBody(r.body);
+          if (body) entry.appendChild(body);
+          changelogLog.appendChild(entry);
+        });
+        changelogStatus.textContent = releases.length + ' release' +
+          (releases.length === 1 ? '' : 's') + ', newest first — from ' + source + '.';
+      }
+
+      commitLog.textContent = '';
+      data.commits.forEach(function (c) {
+        var row = el('div', 'commit');
+        if (c.url) {
+          var a = el('a', 'sha', c.sha);
+          a.href = c.url;
+          a.rel = 'noopener';
+          row.appendChild(a);
+        } else {
+          row.appendChild(el('span', 'sha', c.sha));
+        }
+        row.appendChild(el('span', 'subject', c.subject));
+        commitLog.appendChild(row);
+      });
+      commitsStatus.hidden = data.commits.length === 0;
+
+      if (data.latest) {
+        versionBadge.textContent = 'v' + data.latest;
+        factVersion.textContent = data.latest;
+        factArtifacts.textContent = 'flux.exe, flux-setup-' + data.latest + '.exe, .sha256';
+      }
+    }
+
+    getJSON('./cache.json')
+      .then(function (d) { render(normalise(d, false), 'docs/cache.json'); })
+      .catch(function () {
+        // No cache yet (or it is missing from the artifact); ask GitHub directly.
+        return Promise.all([
+          getJSON(API + '/releases?per_page=25'),
+          getJSON(API + '/commits?per_page=20'),
+        ])
+          .then(function (r) {
+            var d = normalise({ releases: r[0], commits: r[1] }, true);
+            render(d, 'the GitHub API');
+          })
+          .catch(function (err) {
+            changelogStatus.textContent =
+              'Could not load releases (' + err.message + '). See them on GitHub.';
+            commitsStatus.hidden = false;
+            commitsStatus.textContent = 'Could not load commits.';
+          });
+      });
+  })();
+</script>
+</body>
+</html>

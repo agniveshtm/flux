@@ -1,0 +1,120 @@
+name: Update cache
+
+# Writes docs/cache.json, which docs/index.html reads to show releases and
+# recent commits. Same shape as the Portfolio repo's update-cache workflow: a
+# scheduled job fetches from GitHub, flattens it to one small JSON file, and
+# commits it, so the page itself never makes an authenticated request.
+#
+# REST rather than GraphQL on purpose. GraphQL would need a token, and a token
+# in browser JavaScript would be public to anyone who views source. REST needs
+# none, which is why the Portfolio workflow uses it too.
+on:
+  release:
+    types: [published]
+  schedule:
+    # Deliberately off the hour: every workflow scheduled at :00 fires at the
+    # same instant across GitHub's fleet.
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cache
+  cancel-in-progress: false
+
+jobs:
+  update-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch releases and commits
+        env:
+          # Optional. Lifts the unauthenticated 60 requests/hour cap that a
+          # shared runner IP can otherwise hit.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          curl -sf "https://api.github.com/repos/agniveshtm/flux/releases?per_page=25" \
+            -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: flux-cache" \
+            ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} > /tmp/releases.json
+
+          curl -sf "https://api.github.com/repos/agniveshtm/flux/commits?per_page=20" \
+            -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: flux-cache" \
+            ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} > /tmp/commits.json
+
+          jq 'now | todate' /dev/null > /tmp/now.txt
+
+          jq -n \
+            --slurpfile releases /tmp/releases.json \
+            --slurpfile commits /tmp/commits.json \
+            --arg fetchedAt "$(cat /tmp/now.txt)" \
+            '
+            # Release bodies arrive as HTML; flatten to text so the page can
+            # inject it safely. A handful of entities are decoded because jq
+            # has no HTML parser.
+            def text: (gsub("<[^>]*>"; " ")
+                       | gsub("&amp;"; "&")
+                       | gsub("&lt;"; "<")
+                       | gsub("&gt;"; ">")
+                       | gsub("&quot;"; "\"")
+                       | gsub("&#39;"; "\u0027")
+                       | gsub("&nbsp;"; " ")
+                       | gsub("[ \\t]+"; " ")
+                       | gsub("\\n[ \\t]+"; "\n")
+                       | sub("^\\s+"; "")
+                       | sub("\\s+$"; ""));
+
+            def version: (.tag_name | ltrimstr("v"));
+
+            [ $releases[0][]
+              | select(.draft == false)
+              | select(.tag_name | test("^v?[0-9]"))
+              | {
+                  tag: .tag_name,
+                  version: (.tag_name | version),
+                  name: (.name // ""),
+                  published: (.published_at // ""),
+                  url: (.html_url // ""),
+                  prerelease: .prerelease,
+                  body: ((.body // "") | text)
+                }
+            ] as $releases
+            | [ $commits[0][]
+              | {
+                  sha: (.sha[0:7]),
+                  subject: (.commit.message | split("\n")[0]),
+                  date: (.commit.author.date // ""),
+                  url: .html_url
+                }
+            ] as $commits
+            | {
+                source: "rest",
+                repo: "agniveshtm/flux",
+                fetchedAt: $fetchedAt,
+                latest: ($releases[0].version // ""),
+                releases: $releases,
+                commits: $commits
+              }
+            ' > docs/cache.json
+
+          jq -r '"cache.json - \(.releases | length) release(s), \(.commits | length) commit(s), latest \(.latest // "none")"' docs/cache.json
+
+      - name: Commit
+        run: |
+          if git diff --quiet -- docs/cache.json; then
+            echo "cache already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/cache.json
+          # No [skip ci]: the commit that updates the cache is what triggers a
+          # Pages redeploy, which is how a new release reaches the site.
+          git commit -m "chore: update cache"
+          git push

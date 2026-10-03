@@ -1,0 +1,80 @@
+name: Deploy site to Pages
+
+# Publishes docs/index.html to GitHub Pages.
+#
+# The page references the app's own artwork - ../src/flux/assets/... - so that
+# nothing is duplicated in the repository. That path only resolves inside a
+# checkout, though; on Pages the site root is the artifact, so the workflow
+# assembles _site/ with the assets beside the page and rewrites those paths.
+# Nothing is committed back, so there is no deploy loop.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/flux/assets/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      - name: Assemble the site
+        run: |
+          set -euo pipefail
+          rm -rf _site
+          mkdir -p _site/assets/fonts
+
+          # Rewrite the in-repo asset paths to sit beside the deployed page.
+          sed -e 's#\.\./src/flux/assets/#assets/#g' \
+              -e 's#\.\./src/flux/frontend/assets/fonts/#assets/fonts/#g' \
+              docs/index.html > _site/index.html
+
+          # The favicon reference in the head is rewritten by the same sed, but
+          # the logo <img> tags are too - verify rather than assume.
+          cp src/flux/assets/logo.svg        _site/assets/
+          cp src/flux/assets/logo-dark.png   _site/assets/
+          cp src/flux/assets/logo-light.png  _site/assets/
+          cp src/flux/frontend/assets/fonts/Inter-Variable.ttf _site/assets/fonts/
+
+          # Ship the cache alongside the page so the first paint has data even
+          # before the cache workflow has run for this commit.
+          if [ -f docs/cache.json ]; then
+            cp docs/cache.json _site/cache.json
+          else
+            echo '{ "source": "rest", "releases": [], "commits": [] }' > _site/cache.json
+            echo "no docs/cache.json yet; the page will fall back to the GitHub API"
+          fi
+
+          echo "--- deployed tree ---"
+          find _site -type f | sort
+          echo "--- asset references in the built page ---"
+          grep -o '\(src\|href\)="[^"]*assets[^"]*"' _site/index.html | sort -u
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
