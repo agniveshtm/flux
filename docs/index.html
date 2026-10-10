@@ -229,6 +229,7 @@ table.matrix { border-collapse: collapse; width: 100%; min-width: 560px; font-si
 
 /* --- changelog --- */
 .log-status { color: var(--color-muted); font-size: 0.875rem; margin: 0 0 1.5rem; }
+.log-status a { color: var(--color-text); text-decoration: underline; }
 .log-status[hidden] { display: none; }
 .log-entry { margin-bottom: 2.5rem; }
 .log-entry:last-child { margin-bottom: 0; }
@@ -446,9 +447,9 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
       <p class="eyebrow">Changelog</p>
       <h2>Release log</h2>
       <p class="section-lede">
-        Read from the project's GitHub releases, newest first. Refreshed by a
-        workflow when a release is published and once a day in between, so this
-        is the actual history rather than a copy that can drift.
+        Read live from the project's GitHub releases, newest first, so this is
+        the actual history rather than a copy that can drift. A short browser
+        cache covers GitHub's unauthenticated rate limit.
       </p>
 
       <p class="log-status" id="changelog-status" role="status">Loading releases…</p>
@@ -461,8 +462,9 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
       <p class="eyebrow">Commits</p>
       <h2>Recent activity</h2>
       <p class="section-lede">
-        The latest commits on the default branch. Refreshed by the same workflow,
-        so merged work shows up here without anyone editing the page.
+        The latest commits on the default branch, fetched straight from the
+        GitHub API, so merged work shows up here without anyone editing the
+        page.
       </p>
 
       <p class="log-status" id="commits-status" role="status">Loading commits…</p>
@@ -533,14 +535,18 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
   })();
 
   // --- releases and commits -------------------------------------------------
-  // Reads docs/cache.json, which .github/workflows/update-cache.yml regenerates
-  // hourly, on every release publish, and on manual dispatch. Same shape as the
-  // Portfolio site's cache.json.
+  // Fetched live from the GitHub REST API on every load, the way the Portfolio
+  // site does it: the page asks GitHub directly, with no workflow writing a
+  // file in between. A localStorage copy with a short TTL absorbs GitHub's 60
+  // requests/hour unauthenticated limit, so a rate-limited or offline moment is
+  // the only way this shows anything but live data.
   //
   // REST rather than GraphQL: GraphQL needs a token, and a token shipped in
   // browser JavaScript is readable by anyone who views source.
   (function () {
     var API = 'https://api.github.com/repos/agniveshtm/flux';
+    var CACHE_KEY = 'flux-github-v1';
+    var CACHE_TTL = 120000; // ms - the Portfolio's TTL, ~30 reloads/hour of headroom
 
     var changelogLog = document.getElementById('changelog-log');
     var changelogStatus = document.getElementById('changelog-status');
@@ -554,6 +560,21 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
     function getJSON(url) {
       return fetch(url, { headers: { Accept: 'application/vnd.github+json' } })
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    }
+
+    // --- browser cache -------------------------------------------------------
+    function readCache() {
+      try {
+        var raw = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+        if (!raw || typeof raw.ts !== 'number' || !raw.data) return null;
+        return Date.now() - raw.ts > CACHE_TTL ? null : raw.data;
+      } catch (e) { return null; }
+    }
+
+    function writeCache(data) {
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data: data }));
+      } catch (e) {}
     }
 
     // The cache stores release bodies as plain text already; the REST API
@@ -581,25 +602,51 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
       return ((body && (body.innerText || body.textContent)) || '').replace(/\r/g, '');
     }
 
-    function normalise(d, fromApi) {
-      var releases = (d.releases || []).map(function (r) {
-        return {
-          version: (r.tag || r.tag_name || '').replace(/^v/i, ''),
-          tag: r.tag || r.tag_name || '',
-          name: r.name || '',
-          published: r.published || r.published_at || '',
-          url: r.url || r.html_url || '',
-          body: fromApi ? stripHTML(r.body) : (r.body || ''),
-        };
-      }).filter(function (r) { return /^v?\d/.test(r.tag || ''); });
+    function firstLine(text) {
+      return String(text || '').split('\n')[0].trim();
+    }
+
+    function normalise(d) {
+      var releases = (d.releases || [])
+        .filter(function (r) {
+          if (!r || !r.tag_name) return false;
+          // /releases also lists drafts and pre-releases to anyone with push
+          // access, and the app's updater ignores both - so does the site.
+          if (r.draft || r.prerelease) return false;
+          return /^v?\d/.test(r.tag_name);
+        })
+        .map(function (r) {
+          return {
+            version: r.tag_name.replace(/^v/i, ''),
+            tag: r.tag_name,
+            name: r.name || '',
+            published: r.published_at || '',
+            url: r.html_url || '',
+            // Release bodies arrive as HTML; stripHTML flattens them.
+            body: stripHTML(r.body),
+          };
+        })
+        .sort(function (a, b) {
+          return new Date(b.published).getTime() - new Date(a.published).getTime();
+        });
 
       return {
-        // Derived when absent, so the API fallback - which carries no `latest`
-        // field - still fills the version badge and the artifact names.
-        latest: d.latest || (releases.length ? releases[0].version : ''),
+        // Derived, because the releases endpoint carries no `latest` field -
+        // the badge and the artifact names still need one.
+        latest: releases.length ? releases[0].version : '',
         releases: releases,
         commits: (d.commits || []).map(function (c) {
-          return { sha: c.sha, subject: c.subject || '', date: c.date || '', url: c.url || '' };
+          var nested = c.commit || {};
+          // The commits endpoint nests the message and author date under
+          // `commit`, carries the web link as `html_url` (the `url` field is
+          // the API endpoint, not a page), and returns the full 40-character
+          // sha - the row is a 7ch column.
+          return {
+            sha: (c.sha || '').slice(0, 7),
+            subject: firstLine(nested.message),
+            date: (nested.author || {}).date || '',
+            url: c.html_url || '',
+          };
         }),
       };
     }
@@ -681,7 +728,11 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
         row.appendChild(el('span', 'subject', c.subject));
         commitLog.appendChild(row);
       });
-      commitsStatus.hidden = data.commits.length === 0;
+      commitsStatus.hidden = false;
+      commitsStatus.textContent = data.commits.length
+        ? data.commits.length + ' commit' + (data.commits.length === 1 ? '' : 's') +
+          ', newest first — from ' + source + '.'
+        : 'No recent commits.';
 
       if (data.latest) {
         versionBadge.textContent = 'v' + data.latest;
@@ -697,24 +748,38 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
       }
     }
 
-    getJSON('./cache.json')
-      .then(function (d) { render(normalise(d, false), 'docs/cache.json'); })
-      .catch(function () {
-        // No cache yet (or it is missing from the artifact); ask GitHub directly.
-        return Promise.all([
-          getJSON(API + '/releases?per_page=25'),
-          getJSON(API + '/commits?per_page=20'),
-        ])
-          .then(function (r) {
-            var d = normalise({ releases: r[0], commits: r[1] }, true);
-            render(d, 'the GitHub API');
-          })
-          .catch(function (err) {
-            changelogStatus.textContent =
-              'Could not load releases (' + err.message + '). See them on GitHub.';
-            commitsStatus.hidden = false;
-            commitsStatus.textContent = 'Could not load commits.';
-          });
+    // Cache-first: a fresh localStorage copy is the answer, and the fetch is
+    // skipped entirely. Skipping it is the whole point of the TTL - GitHub
+    // allows 60 unauthenticated requests per hour per IP, so a visitor who
+    // reloads a few times would otherwise spend the whole allowance on data
+    // they already have. The cost is up to two minutes of staleness.
+    var cached = readCache();
+    if (cached) {
+      render(cached, 'a cached copy');
+      return;
+    }
+
+    Promise.all([
+      getJSON(API + '/releases?per_page=25'),
+      getJSON(API + '/commits?per_page=20'),
+    ])
+      .then(function (r) {
+        var data = normalise({ releases: r[0], commits: r[1] });
+        render(data, 'the GitHub API');
+        writeCache(data);
+      })
+      .catch(function (err) {
+        // Rate-limited, offline, or blocked: say so rather than guessing, and
+        // offer the releases page as the way out. The link is built as an
+        // element with textContent, like every other piece of text here.
+        changelogStatus.textContent = 'Could not load releases (' + err.message + '). ';
+        var releasesLink = el('a', null, 'See them on GitHub.');
+        releasesLink.href = 'https://github.com/agniveshtm/flux/releases';
+        releasesLink.rel = 'noopener';
+        changelogStatus.appendChild(releasesLink);
+        commitLog.textContent = '';
+        commitsStatus.hidden = false;
+        commitsStatus.textContent = 'Could not load commits.';
       });
   })();
 </script>

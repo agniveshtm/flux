@@ -197,7 +197,6 @@ class BaseConverter(ABC):
 flux/
 ├── docs/
 │   ├── index.html                   # Public project site (deployed to Pages)
-│   ├── cache.json                   # Cached releases + commits (workflow-generated)
 │   ├── PRD.md
 │   ├── timeline.md
 │   ├── ARCHITECTURE.md
@@ -206,7 +205,6 @@ flux/
 │   └── workflows/
 │       ├── test.yml              # CI: pytest, frontend, CSS, installer checks
 │       ├── release.yml           # tag-driven release pipeline
-│       ├── update-cache.yml      # writes docs/cache.json from GitHub
 │       └── pages.yml             # deploys docs/index.html to GitHub Pages
 ├── installer/
 │   └── flux.iss                  # Inno Setup script (dist/flux.exe → setup)
@@ -230,8 +228,7 @@ flux/
 │           │   └── styles/
 │           └── dist/               # built output (committed)
 ├── scripts/
-│   ├── check-frontend.js         # node syntax/template/index checks (no deps)
-│   └── build_cache.py            # one-shot docs/cache.json generator
+│   └── check-frontend.js         # node syntax/template/index checks (no deps)
 ├── tests/                        # pytest suite (version + updater)
 ├── flux.spec                     # PyInstaller spec (dist/flux.exe)
 ├── pyproject.toml
@@ -250,24 +247,23 @@ system rather than defining its own (rationale in DECISIONS 2026-10-02).
 ### Release & commit data flow
 
 ```
-GitHub releases + commits
+GitHub REST API  /repos/agniveshtm/flux/{releases,commits}
         │
-        │  update-cache.yml  (release publish · hourly · manual)
-        │  curl + jq, GITHUB_TOKEN optional
-        ▼
-docs/cache.json  ── committed, so the page has data on first deploy
-        │
-        │  fetch('./cache.json')      ← preferred: same-origin, no rate limit
-        │  on failure ↓                (e.g. opened from file://)
-        │  GitHub REST API             ← live, 60 req/hr unauthenticated
+        │  fetch on every page load          ← the only data source
+        │  localStorage copy, 2-minute TTL   ← absorbs the 60 req/hr limit
         ▼
 renders releases, commits, version badge, artifact names
 ```
 
-REST rather than GraphQL throughout: GraphQL needs a token, and a token in
-browser JavaScript is public. `scripts/build_cache.py` writes the same shape
-locally, so the file exists on the first commit rather than only after CI runs;
-CI owns it from then on.
+No workflow writes a data file. An earlier design regenerated a committed
+`docs/cache.json` hourly, which made "recent activity" as stale as the last run
+and generated a commit every hour to say so; it was removed once the page read
+the API directly (DECISIONS 2026-10-10). REST rather than GraphQL throughout:
+GraphQL needs a token, and a token in browser JavaScript is public. GitHub's
+unauthenticated cap (60 requests/hour per IP) is worn by the 2-minute
+localStorage copy, which also paints instantly on a repeat visit; when it is
+exhausted, or the visitor is offline, the section says so with a link to GitHub
+rather than showing stale data.
 
 Release bodies are untrusted input. They reach the DOM only through
 `textContent`/`createTextNode`, and the API fallback flattens HTML with
@@ -277,9 +273,9 @@ are fetched. The page contains no `innerHTML`, `outerHTML`, `insertAdjacentHTML`
 
 ### Deployment
 
-`pages.yml` assembles `_site/` — the page, the four assets it needs, and the
-cache — and rewrites the page's `../src/flux/assets/…` references as it copies.
-Uploading the repository instead would put the site at `/docs/` and expose
+`pages.yml` assembles `_site/` — the page and the four assets it needs — and
+rewrites the page's `../src/flux/assets/…` references as it copies. Uploading the
+repository instead would put the site at `/docs/` and expose
 `src/`, `tests/` and `scripts/`; committing duplicate assets would recreate the
 second-source problem the format matrix had.
 
