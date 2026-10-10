@@ -1,7 +1,7 @@
 {
   "source": "rest",
   "repo": "agniveshtm/flux",
-  "fetchedAt": "2026-10-10T06:02:32Z",
+  "fetchedAt": "2026-10-10T12:43:15Z",
   "latest": "0.2.0",
   "releases": [
     {
@@ -24,6 +24,12 @@
     }
   ],
   "commits": [
+    {
+      "sha": "5273f51",
+      "subject": "chore: update cache",
+      "date": "2026-10-10T06:02:32Z",
+      "url": "https://github.com/agniveshtm/flux/commit/5273f512f9d8379660dcd57fe482344740bdd6e3"
+    },
     {
       "sha": "dc3340a",
       "subject": "Merge pull request #9 from agniveshtm/feature",
@@ -137,12 +143,6 @@
       "subject": "feat(app): support ICO, AVIF and GIF conversions",
       "date": "2026-10-02T02:20:15Z",
       "url": "https://github.com/agniveshtm/flux/commit/801deaf6553df9be8fca5c3983ab6a49bc062d4b"
-    },
-    {
-      "sha": "906054d",
-      "subject": "chore(deps-dev): update uv-build requirement",
-      "date": "2026-09-29T12:24:55Z",
-      "url": "https://github.com/agniveshtm/flux/commit/906054dddac2774ae02c869a7e90bf4ea13ff030"
     }
   ]
 }
