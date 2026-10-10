@@ -48,64 +48,19 @@ jobs:
             -H "User-Agent: flux-cache" \
             ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} > /tmp/commits.json
 
-          jq 'now | todate' /dev/null > /tmp/now.txt
+          # -r: without it jq JSON-encodes its output, and the timestamp would
+          # reach cache.json wrapped in literal quote characters.
+          jq -rn 'now | todate' > /tmp/now.txt
 
+          # The filter lives in scripts/build_cache.jq rather than inline.
+          # A jq program nested in a YAML block scalar and a shell single quote
+          # cannot contain an apostrophe, and the quoting around it is what
+          # broke the previous run. -f also makes the filter testable directly.
           jq -n \
-            --slurpfile releases /tmp/releases.json \
-            --slurpfile commits /tmp/commits.json \
+            --rawfile releases /tmp/releases.json \
+            --rawfile commits /tmp/commits.json \
             --arg fetchedAt "$(cat /tmp/now.txt)" \
-            '
-            # Release bodies arrive as HTML; flatten to text so the page can
-            # inject it safely. script/style blocks are dropped whole before the
-            # tags are stripped, so their contents do not survive as text - this
-            # matches what scripts/build_cache.py does locally. A handful of
-            # entities are decoded because jq has no HTML parser.
-            def text: (gsub("<script[^>]*>[\\s\\S]*?</script>"; " ")
-                       | gsub("<style[^>]*>[\\s\\S]*?</style>"; " ")
-                       | gsub("<[^>]*>"; " ")
-                       | gsub("&amp;"; "&")
-                       | gsub("&lt;"; "<")
-                       | gsub("&gt;"; ">")
-                       | gsub("&quot;"; "\"")
-                       | gsub("&#39;"; "\u0027")
-                       | gsub("&nbsp;"; " ")
-                       | gsub("[ \\t]+"; " ")
-                       | gsub("\\n[ \\t]+"; "\n")
-                       | sub("^\\s+"; "")
-                       | sub("\\s+$"; ""));
-
-            def version: (.tag_name | ltrimstr("v"));
-
-            [ $releases[0][]
-              | select(.draft == false)
-              | select(.tag_name | test("^v?[0-9]"))
-              | {
-                  tag: .tag_name,
-                  version: (.tag_name | version),
-                  name: (.name // ""),
-                  published: (.published_at // ""),
-                  url: (.html_url // ""),
-                  prerelease: .prerelease,
-                  body: ((.body // "") | text)
-                }
-            ] as $releases
-            | [ $commits[0][]
-              | {
-                  sha: (.sha[0:7]),
-                  subject: (.commit.message | split("\n")[0]),
-                  date: (.commit.author.date // ""),
-                  url: .html_url
-                }
-            ] as $commits
-            | {
-                source: "rest",
-                repo: "agniveshtm/flux",
-                fetchedAt: $fetchedAt,
-                latest: ($releases[0].version // ""),
-                releases: $releases,
-                commits: $commits
-              }
-            ' > docs/cache.json
+            -f scripts/build_cache.jq > docs/cache.json
 
           jq -r '"cache.json - \(.releases | length) release(s), \(.commits | length) commit(s), latest \(.latest // "none")"' docs/cache.json
 

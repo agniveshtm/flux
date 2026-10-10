@@ -62,3 +62,68 @@ Delivered in six phases, each independently shippable.
   target, animation timing, AVIF quality/ICC. Frozen build confirmed to contain
   `PIL.AvifImagePlugin` (PYZ) and `PIL._avif` (binary archive).
 - Tests: 39 -> 81.
+
+## 2026-10-02 (Project site)
+
+Added `docs/index.html`, a single-page site for the application: what Flux
+does, the six formats and the thirty conversion paths between them, the release
+log and recent commits. It reuses the app's own design system - the CSS tokens
+from `input.css`, the vendored Inter font, the logo artwork and the `flux-theme`
+storage key - so the site and the desktop app cannot drift apart.
+
+- Two workflows. `update-cache.yml` writes `docs/cache.json` on release publish,
+  hourly and on manual dispatch, using curl + jq so no new dependency enters the
+  project. `pages.yml` deploys the site to GitHub Pages. Rationale for the cache
+  shape and for REST over GraphQL in DECISIONS 2026-10-02.
+- The page prefers `cache.json` and falls back to the GitHub REST API, so it
+  still works when opened from file:// where a sibling fetch is CORS-blocked.
+  The version badge, artifact names and latest-version row all come from the
+  same data.
+- Deploy assembles `_site/` rather than uploading the repository: the URL is
+  the site root rather than /docs/, and src/, tests/ and scripts/ are not
+  published. It rewrites the page's `../src/flux/assets/` references as it
+  copies, which keeps the artwork in one place instead of duplicated into
+  docs/.
+
+Bugs found and fixed while building it:
+
+- The theme toggle rendered both icons. `.icon-btn svg { display: block }`
+  outranks the UA stylesheet's `[hidden] { display: none }`, so the hidden
+  attribute did nothing - and `hidden` is an HTMLElement property, so setting it
+  on an <svg> was unreliable anyway. The swap is now CSS driven by the `.dark`
+  class, with no JavaScript involved.
+- The logo was stretched ~15%. logo-dark.png and logo-light.png are portrait
+  (251x290), not square, so a fixed width fought the intrinsic aspect ratio. They
+  are sized by height alone now. The SVG had hidden this because it is square.
+- Crimson #DC143C fails WCAG AA as text: 3.94:1 on the dark background and 3.70:1
+  on its own tint. Measured every text and graphic pair rather than sampling it -
+  five failures, now zero. Crimson stays where 3:1 applies (buttons, borders,
+  graphics) and every label uses --color-text or --color-muted. The green used
+  for matrix cells measured 2.07:1 on the light surface and was replaced.
+
+CodeQL reported js/incomplete-multi-character-sanitization on the API fallback's
+stripHTML. Valid on both counts: the sink was innerHTML, which does not run
+<script> but does fetch <img src>, so an onerror payload in a release body would
+fire - reachable exactly when cache.json is absent. And a single regex pass can
+leave a tag re-formed, which is what the rule documents. Replaced with DOMParser,
+which builds an inert document where scripts never run and no resources are
+fetched. The page now has no innerHTML, outerHTML, insertAdjacentHTML,
+document.write, eval or new Function.
+
+Review findings fixed afterwards:
+
+- The release-triggered cache run checked out the tag, so HEAD was detached and a
+  bare `git push` failed. Now pushes HEAD:main.
+- The download button pointed at releases/latest, which returns text/html. It now
+  resolves to the versioned asset, verified to return Content-Disposition:
+  attachment.
+- The API fallback supplied no `latest`, so the version badge and artifact row
+  stayed blank on the file:// path.
+- The Pages path filter missed the vendored font directory, so a font-only change
+  left the deployed site stale.
+- The jq text filter stripped tags but left script and style block contents as
+  visible text, unlike build_cache.py and the page's DOMParser path.
+
+One review finding was checked and rejected: the claim that
+`${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"}` passes its quotes
+through as literals. Tested in Git Bash - curl receives exactly two arguments.
