@@ -229,6 +229,7 @@ table.matrix { border-collapse: collapse; width: 100%; min-width: 560px; font-si
 
 /* --- changelog --- */
 .log-status { color: var(--color-muted); font-size: 0.875rem; margin: 0 0 1.5rem; }
+.log-status a { color: var(--color-text); text-decoration: underline; }
 .log-status[hidden] { display: none; }
 .log-entry { margin-bottom: 2.5rem; }
 .log-entry:last-child { margin-bottom: 0; }
@@ -747,11 +748,16 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
       }
     }
 
-    // Stale-while-revalidate: the cached copy paints at once, and the API
-    // response replaces it only when it differs, so a reload with nothing new
-    // never re-renders.
+    // Cache-first: a fresh localStorage copy is the answer, and the fetch is
+    // skipped entirely. Skipping it is the whole point of the TTL - GitHub
+    // allows 60 unauthenticated requests per hour per IP, so a visitor who
+    // reloads a few times would otherwise spend the whole allowance on data
+    // they already have. The cost is up to two minutes of staleness.
     var cached = readCache();
-    if (cached) render(cached, 'a cached copy');
+    if (cached) {
+      render(cached, 'a cached copy');
+      return;
+    }
 
     Promise.all([
       getJSON(API + '/releases?per_page=25'),
@@ -759,17 +765,18 @@ dl.facts dd { margin: 0; font-family: 'SF Mono', 'Cascadia Code', Consolas, mono
     ])
       .then(function (r) {
         var data = normalise({ releases: r[0], commits: r[1] });
-        if (!cached || JSON.stringify(cached) !== JSON.stringify(data)) {
-          render(data, 'the GitHub API');
-        }
+        render(data, 'the GitHub API');
         writeCache(data);
       })
       .catch(function (err) {
-        // Rate-limited, offline, or blocked: say so rather than guessing. The
-        // localStorage copy above already absorbs the transient cases, so what
-        // is left is a genuine "cannot reach GitHub" moment.
-        changelogStatus.textContent =
-          'Could not load releases (' + err.message + '). See them on GitHub.';
+        // Rate-limited, offline, or blocked: say so rather than guessing, and
+        // offer the releases page as the way out. The link is built as an
+        // element with textContent, like every other piece of text here.
+        changelogStatus.textContent = 'Could not load releases (' + err.message + '). ';
+        var releasesLink = el('a', null, 'See them on GitHub.');
+        releasesLink.href = 'https://github.com/agniveshtm/flux/releases';
+        releasesLink.rel = 'noopener';
+        changelogStatus.appendChild(releasesLink);
         commitLog.textContent = '';
         commitsStatus.hidden = false;
         commitsStatus.textContent = 'Could not load commits.';

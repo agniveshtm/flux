@@ -273,9 +273,9 @@ are fetched. The page contains no `innerHTML`, `outerHTML`, `insertAdjacentHTML`
 
 ### Deployment
 
-`pages.yml` assembles `_site/` — the page, the four assets it needs, and the
-cache — and rewrites the page's `../src/flux/assets/…` references as it copies.
-Uploading the repository instead would put the site at `/docs/` and expose
+`pages.yml` assembles `_site/` — the page and the four assets it needs — and
+rewrites the page's `../src/flux/assets/…` references as it copies. Uploading the
+repository instead would put the site at `/docs/` and expose
 `src/`, `tests/` and `scripts/`; committing duplicate assets would recreate the
 second-source problem the format matrix had.
 
