@@ -54,7 +54,7 @@ def on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _capture_install(api: FluxAPI, monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    captured: list[str] = []
+    captured: list[list[str]] = []
 
     def fake_popen(args, **kwargs):
         captured.append(list(args))

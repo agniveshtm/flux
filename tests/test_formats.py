@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from flux.converter import normalize_format
 from flux.services.image_converter import (
     INPUT_FORMATS,
     OUTPUT_FORMATS,
@@ -30,6 +31,7 @@ from flux.window import FluxAPI
 REPO_ROOT = Path(__file__).resolve().parents[1]
 USE_FLUX = REPO_ROOT / "src" / "flux" / "frontend" / "composables" / "useFlux.js"
 WINDOW = REPO_ROOT / "src" / "flux" / "window.py"
+MAIN_JS = REPO_ROOT / "src" / "flux" / "frontend" / "main.js"
 
 
 def _js_format_lists() -> dict[str, list[str]]:
@@ -88,6 +90,23 @@ def test_every_supported_input_format_can_be_previewed() -> None:
     assert api._mime_type_for(".txt") is None
 
 
+def test_preview_allowlist_admits_nothing_the_converter_cannot_read() -> None:
+    # The reverse direction, which the test above does not check. The map used
+    # to carry .bmp, .tif and .tiff - formats Flux cannot convert - so the page
+    # could preview a file the app would then refuse, and the allowlist was
+    # wider than the boundary it was meant to describe. Both directions are now
+    # pinned so the two lists cannot drift apart again.
+    allowed = {suffix.lstrip(".") for suffix in FluxAPI._PREVIEW_MIME_TYPES}
+
+    # .avif is defensible in either direction: it is in INPUT_FORMATS whenever
+    # this build can read it, and the static map keeps it when it cannot.
+    expected = set(INPUT_FORMATS)
+    assert allowed == expected or allowed == expected - {"avif"} or allowed == expected | {"avif"}, (
+        f"preview allowlist {sorted(allowed)} does not match the readable formats "
+        f"{sorted(expected)}"
+    )
+
+
 def test_conversion_matrix_is_derived_not_hardcoded() -> None:
     """The dropdown offers exactly the backend outputs minus the input itself.
 
@@ -101,3 +120,53 @@ def test_conversion_matrix_is_derived_not_hardcoded() -> None:
         targets = [out for out in outputs if out != fmt]
         assert fmt not in targets, f"{fmt} must not be offered as a target of itself"
         assert set(targets) == set(outputs) - {fmt}
+
+
+def _target_preference() -> list[str]:
+    """Pull TARGET_PREFERENCE's entries out of main.js."""
+    source = MAIN_JS.read_text(encoding="utf-8")
+    match = re.search(
+        r"const TARGET_PREFERENCE\s*=\s*\[(?P<items>[^\]]*)\]", source
+    )
+    assert match, "TARGET_PREFERENCE not found in main.js"
+    return re.findall(r"['\"]([^'\"]+)['\"]", match.group("items"))
+
+
+def test_default_target_is_not_avif() -> None:
+    """A dropped file must never preselect AVIF when another target exists.
+
+    `getDefaultTargetFormat` used to return `targetsForInput(ext)[0]`, and
+    because the matrix is derived from `getSupportedFormats()` - which returns
+    sorted lists - that is the alphabetically first target: 'avif' for every
+    input except AVIF itself. Every file a user dropped was therefore preloaded
+    for the slowest encoder here and the least compatible output, before they
+    had chosen anything, and the quality slider appeared with it.
+
+    `TARGET_PREFERENCE` now states the order explicitly. The invariant that
+    matters is that AVIF stays last, and that the list covers every format the
+    backend can write - otherwise the `offered[0]` fallback would silently
+    reintroduce the alphabetical default for the uncovered format.
+    """
+    preference = _target_preference()
+    outputs = list(OUTPUT_FORMATS)
+
+    assert set(outputs) <= set(preference), (
+        f"TARGET_PREFERENCE is missing {sorted(set(outputs) - set(preference))}, "
+        "so those formats fall back to the alphabetical first target"
+    )
+    assert preference[-1] == "avif", (
+        f"'avif' must stay last in TARGET_PREFERENCE (got {preference}); "
+        "an earlier position makes it some input's silent default"
+    )
+    # No format may appear twice: the first occurrence would win and the second
+    # would be dead weight that reads as part of the ordering.
+    assert len(preference) == len(set(preference)), (
+        f"TARGET_PREFERENCE has duplicates: {preference}"
+    )
+
+    for fmt in INPUT_FORMATS:
+        targets = [out for out in outputs if out != normalize_format(fmt)]
+        expected = next(out for out in preference if out in targets)
+        assert expected != "avif" or targets == ["avif"], (
+            f"{fmt} would preselect 'avif' although {targets} are available"
+        )
