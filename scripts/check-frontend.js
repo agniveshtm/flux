@@ -21,6 +21,7 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const FRONTEND = path.join(ROOT, 'src', 'flux', 'frontend');
+const MAIN_JS = path.join(FRONTEND, 'main.js');
 const VUE_PATH = path.join(FRONTEND, 'vendor', 'vue.global.prod.js');
 const INDEX_PATH = path.join(FRONTEND, 'index.html');
 
@@ -189,6 +190,63 @@ function checkIndexWiring() {
   if (localFailures === 0) ok('index.html script tags match files on disk');
 }
 
+function checkDefaultTarget() {
+  // Behavioural check, because a source-parsing test cannot catch this class of
+  // regression: tests/test_formats.py pins TARGET_PREFERENCE's contents, but a
+  // change to getDefaultTargetFormat alone would leave that test green. The
+  // helper is extracted and executed here, and its wiring is asserted, so
+  // reverting to `targets[0]` fails on two counts.
+  const source = fs.readFileSync(MAIN_JS, 'utf8');
+
+  const wiring = source.match(/function getDefaultTargetFormat\([\s\S]*?\n    \}/);
+  if (!wiring || !wiring[0].includes('defaultTargetFor')) {
+    fail(
+      'main.js getDefaultTargetFormat',
+      'does not call defaultTargetFor; targets[0] of the derived (sorted) matrix preselects avif for every input'
+    );
+    return;
+  }
+  ok('main.js getDefaultTargetFormat uses defaultTargetFor');
+
+  const preference = source.match(/const TARGET_PREFERENCE = \[[^\]]*\];/);
+  const helper = source.match(/const defaultTargetFor = [\s\S]*?\n};/);
+  if (!preference || !helper) {
+    fail('main.js TARGET_PREFERENCE', 'could not locate TARGET_PREFERENCE or defaultTargetFor');
+    return;
+  }
+
+  let pick;
+  try {
+    // eslint-disable-next-line no-new-func
+    pick = new Function(
+      `${preference[0]}\n${helper[0]}\nreturn { defaultTargetFor };`
+    )().defaultTargetFor;
+  } catch (error) {
+    fail('main.js defaultTargetFor', (error && error.stack) || error);
+    return;
+  }
+
+  // getSupportedFormats() returns sorted lists - which is exactly why the old
+  // `targets[0]` preselected the alphabetically first format.
+  const outputs = ['jpg', 'png', 'webp', 'ico', 'gif', 'avif'].sort();
+  const normalizeExt = (ext) => String(ext || '')
+    .trim().toLowerCase().replace(/^\./, '').replace('jpeg', 'jpg');
+
+  let bad = 0;
+  for (const ext of ['jpg', 'jpeg', 'png', 'webp', 'ico', 'gif', 'avif']) {
+    const targets = outputs.filter((out) => out !== normalizeExt(ext));
+    const chosen = pick(ext, targets);
+    if (chosen === 'avif' && targets.length > 1) {
+      bad += 1;
+      fail(
+        `default target for .${ext}`,
+        `preselects 'avif' although [${targets.join(', ')}] are available`
+      );
+    }
+  }
+  if (bad === 0) ok('no input preselects avif when another target exists');
+}
+
 function main() {
   // Browser-ish globals for executing the frontend scripts in plain Node.
   // useFlux.js registers a pywebviewready listener and arms a 3s readiness
@@ -238,6 +296,7 @@ function main() {
   }
 
   checkIndexWiring();
+  checkDefaultTarget();
 
   if (failures > 0) {
     console.error(`\n${failures} frontend check(s) failed`);

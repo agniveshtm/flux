@@ -297,6 +297,28 @@ const App = {
             if (!row.size && delivery.size) row.size = delivery.size;
           }
         });
+        // Now that the paths are known, drop rows that turned out to be the
+        // same file - addFiles cannot see this for a browser drop, where every
+        // row starts path-less, so a re-drop would otherwise leave two rows
+        // converting one file.
+        const seenPaths = new Set();
+        const unique = [];
+        const redundant = [];
+        files.value.forEach(file => {
+          if (file.path && seenPaths.has(file.path)) redundant.push(file);
+          else {
+            if (file.path) seenPaths.add(file.path);
+            unique.push(file);
+          }
+        });
+        if (redundant.length) {
+          redundant.forEach(file => {
+            if (file.objectUrl && typeof URL !== 'undefined') {
+              URL.revokeObjectURL(file.objectUrl);
+            }
+          });
+          files.value = unique;
+        }
       });
 
       // Update check runs once per start; progress is subscribed first so a
@@ -399,17 +421,15 @@ const App = {
         const ext = file.name.split('.').pop()?.toLowerCase() || '';
         const isValid = isSupportedInput(ext);
 
-        // Same name and size is the duplicate test, unless both rows know a
-        // path: name+size alone is not identity (two IMG_0001.png files from
-        // different folders can even have the same size), and dropping one
-        // silently loses a file the user chose. Rows without a path - a browser
-        // drop before Python resolves it - still fall back to the name+size
-        // guess, because that is all there is to go on.
-        const isDuplicate = files.value.some(f => (
-          f.name === file.name
-          && f.size === file.size
-          && (!f.path || !file.path || f.path === file.path)
-        ));
+        // Dedup only when a path can prove identity. A browser drop arrives
+        // with no path yet, so two IMG_0001.png files from different folders
+        // look identical here - and discarding the second would silently lose
+        // a file the user chose, with no way to recover it once the paths
+        // arrive. Those rows are admitted and paired by the drop handler, which
+        // knows the real paths. Same-path duplicates are dropped there instead.
+        const isDuplicate = typeof file.path === 'string' && file.path
+          ? files.value.some(f => f.path && f.path === file.path)
+          : false;
 
         if (isValid && !isDuplicate) {
           files.value.push({

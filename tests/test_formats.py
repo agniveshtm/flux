@@ -133,7 +133,7 @@ def _target_preference() -> list[str]:
 
 
 def test_default_target_is_not_avif() -> None:
-    """A dropped file must never preselect AVIF when another target exists.
+    """TARGET_PREFERENCE must keep AVIF last and cover every output format.
 
     `getDefaultTargetFormat` used to return `targetsForInput(ext)[0]`, and
     because the matrix is derived from `getSupportedFormats()` - which returns
@@ -142,10 +142,12 @@ def test_default_target_is_not_avif() -> None:
     for the slowest encoder here and the least compatible output, before they
     had chosen anything, and the quality slider appeared with it.
 
-    `TARGET_PREFERENCE` now states the order explicitly. The invariant that
-    matters is that AVIF stays last, and that the list covers every format the
-    backend can write - otherwise the `offered[0]` fallback would silently
-    reintroduce the alphabetical default for the uncovered format.
+    `TARGET_PREFERENCE` now states the order explicitly and `defaultTargetFor`
+    walks it. This test pins the *list*; the wiring is verified separately by
+    `scripts/check-frontend.js`, which executes the real `defaultTargetFor` and
+    asserts `getDefaultTargetFormat` calls it. Parsing the source here cannot
+    catch a regression in that wiring, so the two are complementary:
+    re-introducing `targets[0]` leaves this test green.
     """
     preference = _target_preference()
     outputs = list(OUTPUT_FORMATS)
