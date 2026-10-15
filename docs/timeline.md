@@ -127,3 +127,18 @@ Review findings fixed afterwards:
 One review finding was checked and rejected: the claim that
 `${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"}` passes its quotes
 through as literals. Tested in Git Bash - curl receives exactly two arguments.
+
+## 2026-10-10 (Site data layer)
+
+- Deleted the whole cache pipeline: `update-cache.yml`, `docs/cache.json`, `scripts/build_cache.py` and `scripts/build_cache.jq`. The site now fetches the GitHub REST API on every load with a terminal 2-minute localStorage copy. Rationale in DECISIONS 2026-10-10.
+- Merged PR #10 (`ee2affa`), closing the review round: the cache was made cache-first so the fetch is skipped entirely while a fresh copy exists, and the failure message now links to GitHub instead of printing the words.
+- Verified in headless Chrome that the cached path makes zero network calls, by blocking `api.github.com` and requiring the cached copy to render anyway.
+
+## 2026-10-14 (Audit fixes)
+
+- Audited the app before the HEIF/HEIC/SVG work and found seven defects; all are now fixed and each new test was proven able to fail before being kept.
+- The preselected conversion target was AVIF for every dropped file, because `getDefaultTargetFormat` took `targets[0]` of a sorted matrix. Now driven by an explicit `TARGET_PREFERENCE` with AVIF last (DECISIONS 2026-10-14).
+- Six further defects in the same area, all fixed: `getSupportedFormats()` under-reported `jpeg`; dropped files were matched to rows by name alone; duplicate detection dropped distinct files sharing name and size; a batch with the same input twice shared one output and lost the second; pruned rows leaked object URLs; and the preview allowlist admitted `.bmp`/`.tif`/`.tiff`, which Flux cannot convert.
+- Packaging: PyInstaller moved out of runtime dependencies, the installer's fallback version corrected from 0.1.0, and the Inno script now declares the x64 architecture it actually builds (DECISIONS 2026-10-14).
+- Two follow-up review findings on those fixes: dropped rows with no path are no longer discarded by the duplicate check, and `check-frontend.js` now runs a behavioural check on the default-target derivation - reverting to `targets[0]` left the pytest green, which is what the review caught.
+- Raised the HEIF/HEIC/SVG issue, then scoped SVG out: neither rasterizer works on this host (cairosvg needs a native cairo library no wheel ships; svglib's renderer is cairo-backed too), and raster-to-SVG output cannot be done honestly.

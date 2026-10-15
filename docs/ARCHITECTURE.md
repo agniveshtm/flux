@@ -228,7 +228,7 @@ flux/
 │           │   └── styles/
 │           └── dist/               # built output (committed)
 ├── scripts/
-│   └── check-frontend.js         # node syntax/template/index checks (no deps)
+│   └── check-frontend.js         # node syntax/template/wiring + default-target behaviour
 ├── tests/                        # pytest suite (version + updater)
 ├── flux.spec                     # PyInstaller spec (dist/flux.exe)
 ├── pyproject.toml

@@ -9,7 +9,7 @@
 ; .github/workflows/release.yml passes the tag version. The fallback below
 ; only serves manual local builds - keep it in sync with pyproject.toml.
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0"
+  #define MyAppVersion "0.2.1"
 #endif
 
 #define MyAppName "Flux"
@@ -28,6 +28,12 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
 DefaultDirName={autopf}\Flux
 DisableProgramGroupPage=yes
+; The build is PyInstaller on x64 Python, so the artifact is x64 only. Without
+; these two the setup happily installs on 32-bit Windows and then fails to
+; launch; with them the user gets Setup's own "not a valid Win32 application"
+; refusal instead of a broken install.
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 ; Per-user install, no UAC: the in-app updater runs this setup with
 ; /SILENT immediately after closing the app, where an elevation prompt
 ; would strand the user halfway through an upgrade. With

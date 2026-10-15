@@ -403,6 +403,13 @@ class FluxAPI:
     # allowlist, not the converter's format list: the page must not be able to
     # read arbitrary local files, and it is deliberately broader than what Flux
     # converts (BMP/TIFF preview fine but are not conversion inputs).
+    # The only suffixes the preview bridge will read. Kept exactly in step with
+    # image_converter.INPUT_FORMATS (tests/test_formats.py pins both directions)
+    # because this list is a security boundary - it is what stops the page
+    # reading arbitrary local files - and because a format admitted here but not
+    # there produces a preview for a file Flux then refuses to convert. .avif
+    # stays even on a build without libavif: the map is static, and the path is
+    # unreachable for a format the UI never admits as a row.
     _PREVIEW_MIME_TYPES = {
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
@@ -410,10 +417,7 @@ class FluxAPI:
         ".webp": "image/webp",
         ".ico": "image/x-icon",
         ".avif": "image/avif",
-        ".bmp": "image/bmp",
         ".gif": "image/gif",
-        ".tif": "image/tiff",
-        ".tiff": "image/tiff",
     }
 
     @staticmethod
@@ -783,6 +787,11 @@ class FluxAPI:
     def _input_paths(files: list[Any]) -> list[str] | None:
         paths: list[str] = []
         for file in files:
+            # Annotated because the first branch assigns a str and the others
+            # yield whatever the payload carried (a dict's "path", or an
+            # attribute off a pywebview object); the isinstance check below is
+            # what narrows it, so the variable cannot be inferred as str.
+            path: Any
             if isinstance(file, str):
                 path = file
             elif isinstance(file, dict):

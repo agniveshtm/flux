@@ -228,8 +228,10 @@ class _FakeResponse:
     def __enter__(self) -> "_FakeResponse":
         return self
 
-    def __exit__(self, *exc_info: object) -> bool:
-        return False
+    def __exit__(self, *exc_info: object) -> None:
+        # Returning None rather than False: mypy reads a bool-returning
+        # __exit__ as a context manager that might swallow the exception.
+        return None
 
     def geturl(self) -> str:
         return self._url

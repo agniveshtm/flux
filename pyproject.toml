@@ -1,12 +1,11 @@
 [project]
 name = "flux"
-version = "0.2.0"
+version = "0.2.1"
 description = "flux - A Webview app built for file conversions."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pillow>=12.3.0",
-    "pyinstaller>=6.22.3",
     "pywebview>=6.2.1",
 ]
 
@@ -18,6 +17,11 @@ requires = ["uv_build>=0.13.0,<0.14.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
+# Build/test tooling only. PyInstaller belongs here rather than in
+# [project].dependencies: it produces the frozen exe and is never imported by
+# the running app, and listing it as a runtime requirement put a build tool in
+# every install of the package.
 dev = [
+    "pyinstaller>=6.22.3",
     "pytest>=9.1.1",
 ]

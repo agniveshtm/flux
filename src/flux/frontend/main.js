@@ -33,6 +33,31 @@ Object.entries(components).forEach(([name, component]) => {
 // worth showing; a target not listed here ignores a quality option.
 const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif']);
 
+// The order a dropped file's target is preselected from, most compatible first.
+//
+// The matrix is derived and getSupportedFormats() returns it sorted, so "the
+// first available target" is alphabetically first - which is 'avif' for every
+// input that is not AVIF itself. That made AVIF the silent default for every
+// file a user dropped: the slowest encoder here and the least compatible output
+// for a general consumer, offered before they chose anything. This list makes
+// the choice explicit, and 'avif' sits last so it stays something the user
+// picks rather than something they are given.
+const TARGET_PREFERENCE = ['jpg', 'png', 'webp', 'ico', 'gif', 'avif'];
+
+// Which target to preselect for an input extension: the first preference the
+// matrix actually offers, never the input format itself. Falls back to the
+// first offered target so a backend format missing from this list still gets a
+// usable selection rather than 'png' by accident.
+// Pinned by tests/test_formats.py, which asserts 'avif' stays last.
+const defaultTargetFor = (inputExt, targets) => {
+  const offered = Array.isArray(targets) ? targets : [];
+  if (!offered.length) return 'png';
+  for (const fmt of TARGET_PREFERENCE) {
+    if (offered.includes(fmt)) return fmt;
+  }
+  return offered[0];
+};
+
 // Extension normalization mirroring the backend's normalize_format
 // (src/flux/converter.py). The picker hands back "jpeg" for .jpeg files while
 // the backend's format list is normalized to "jpg", so a dropped photo.jpeg has
@@ -256,14 +281,44 @@ const App = {
         if (!Array.isArray(delivered) || delivered.length === 0) return;
         delivered.forEach(delivery => {
           if (!delivery || !delivery.path) return;
-          const row = files.value.find(
+          const pending = files.value.filter(
             f => !f.path && f.status === 'ready' && f.name === delivery.name
           );
+          // Prefer the row whose size agrees. Two dropped files can share a
+          // name (IMG_0001.png in two folders), and matching on name alone
+          // lets the first path-less row win regardless of order - so a row
+          // can end up pointing at the other file's path, which then converts
+          // the wrong file while reporting success.
+          const row = (delivery.size
+            ? pending.find(f => f.size === delivery.size)
+            : null) || pending[0];
           if (row) {
             row.path = delivery.path;
             if (!row.size && delivery.size) row.size = delivery.size;
           }
         });
+        // Now that the paths are known, drop rows that turned out to be the
+        // same file - addFiles cannot see this for a browser drop, where every
+        // row starts path-less, so a re-drop would otherwise leave two rows
+        // converting one file.
+        const seenPaths = new Set();
+        const unique = [];
+        const redundant = [];
+        files.value.forEach(file => {
+          if (file.path && seenPaths.has(file.path)) redundant.push(file);
+          else {
+            if (file.path) seenPaths.add(file.path);
+            unique.push(file);
+          }
+        });
+        if (redundant.length) {
+          redundant.forEach(file => {
+            if (file.objectUrl && typeof URL !== 'undefined') {
+              URL.revokeObjectURL(file.objectUrl);
+            }
+          });
+          files.value = unique;
+        }
       });
 
       // Update check runs once per start; progress is subscribed first so a
@@ -297,6 +352,13 @@ const App = {
         files.value.forEach(file => {
           const input = isSupportedInput(file.name.split('.').pop() || '');
           (input ? kept : dropped).push(file);
+        });
+        // Pruned rows never reach removeFile / handleClear*, so their blob URL
+        // would leak for the life of the page.
+        dropped.forEach(file => {
+          if (file.objectUrl && typeof URL !== 'undefined') {
+            URL.revokeObjectURL(file.objectUrl);
+          }
         });
         files.value = kept;
         if (dropped.length) {
@@ -359,7 +421,17 @@ const App = {
         const ext = file.name.split('.').pop()?.toLowerCase() || '';
         const isValid = isSupportedInput(ext);
 
-        if (isValid && !files.value.some(f => f.name === file.name && f.size === file.size)) {
+        // Dedup only when a path can prove identity. A browser drop arrives
+        // with no path yet, so two IMG_0001.png files from different folders
+        // look identical here - and discarding the second would silently lose
+        // a file the user chose, with no way to recover it once the paths
+        // arrive. Those rows are admitted and paired by the drop handler, which
+        // knows the real paths. Same-path duplicates are dropped there instead.
+        const isDuplicate = typeof file.path === 'string' && file.path
+          ? files.value.some(f => f.path && f.path === file.path)
+          : false;
+
+        if (isValid && !isDuplicate) {
           files.value.push({
             id: `file-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             // Rows are plain data: name/size/type plus a path that the
@@ -383,8 +455,7 @@ const App = {
     }
 
     function getDefaultTargetFormat(inputExt) {
-      const targets = targetsForInput(inputExt);
-      return targets[0] || 'png';
+      return defaultTargetFor(inputExt, targetsForInput(inputExt));
     }
 
     function removeFile(index) {
@@ -588,20 +659,31 @@ const App = {
     // failed and leaves the real success with no path at all.
     function applyOutputs(rows, progress) {
       const outputs = Array.isArray(progress.outputs) ? progress.outputs : null;
+      // Indices already paired with an earlier row. A batch may contain the
+      // same input twice (the same file added twice), and the converter then
+      // writes two outputs - both reported with the identical input key.
+      // Matching by key alone would give both rows the first output and lose
+      // the second; consuming entries in request order pairs them 1:1.
+      const claimed = new Set();
       rows.forEach((file, idx) => {
         let outputPath;
         if (outputs) {
           // Same key the converter reports: the input path, or the filename for
           // browser-dev rows that have none.
           const key = file.path || file.name;
-          const match = outputs.find(entry => entry && entry.input === key);
-          if (!match) {
+          let index = -1;
+          for (let i = 0; i < outputs.length; i += 1) {
+            if (claimed.has(i)) continue;
+            if (outputs[i] && outputs[i].input === key) { index = i; break; }
+          }
+          if (index === -1) {
             file.status = 'error';
             file.error = (progress.error || 'This file did not convert.');
             file.progress = 0;
             return;
           }
-          outputPath = match.output;
+          claimed.add(index);
+          outputPath = outputs[index].output;
         } else {
           outputPath = (progress.outputPaths || [])[idx];
         }

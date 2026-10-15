@@ -83,8 +83,14 @@ class ConverterRegistry:
 
     @property
     def supported_input_formats(self) -> list[str]:
+        # Deliberately NOT run through normalize_format: that helper maps
+        # "jpeg" to "jpg", which is right for a *target* (one encoder, one
+        # canonical name) but wrong for what a converter can *read*. Flux reads
+        # both .jpg and .jpeg files, and collapsing them here made
+        # getSupportedFormats() - which the frontend treats as the single source
+        # of truth - under-report an input every converter accepts.
         formats = {
-            normalize_format(item)
+            str(item).strip().lower().lstrip(".")
             for converter in self._converters.values()
             for item in converter.supported_input_formats
         }

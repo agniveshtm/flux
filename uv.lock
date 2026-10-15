@@ -78,28 +78,30 @@ wheels = [
 
 [[package]]
 name = "flux"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "pillow" },
-    { name = "pyinstaller" },
     { name = "pywebview" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "pyinstaller" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "pillow", specifier = ">=12.3.0" },
-    { name = "pyinstaller", specifier = ">=6.22.3" },
     { name = "pywebview", specifier = ">=6.2.1" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+dev = [
+    { name = "pyinstaller", specifier = ">=6.22.3" },
+    { name = "pytest", specifier = ">=9.1.1" },
+]
 
 [[package]]
 name = "iniconfig"
