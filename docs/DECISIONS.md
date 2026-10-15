@@ -129,3 +129,31 @@
 - **Alternatives:** keep the workflow-written cache as the primary source (the original design); keep it as an offline fallback behind the API (an intermediate state that lasted a few hours and generated an hourly "update cache" commit for data nothing read first).
 - **Why:** the page asks GitHub directly, so a release is visible the moment it is published instead of after the next workflow run, and the repo stops accumulating a commit per hour that only rewrites a file nothing depends on. REST rather than GraphQL keeps the no-token-in-browser-JavaScript property. The 2-minute localStorage copy covers the rate limit and paints instantly on a repeat visit; what it cannot cover - a genuinely offline visitor - is better served by an honest message than by a snapshot of unknown age.
 - **Consequence:** two API calls per cold page view, per visitor, not per view. `/releases` lists drafts and pre-releases to anyone with push access and the app's updater ignores both, so `normalise()` filters them here too. *(Supersedes the fetch order in the 2026-10-02 REST entry; its REST-not-GraphQL rationale stands.)*
+
+## 2026-10-14 - The default conversion target is an explicit preference list
+
+- **Decision:** `TARGET_PREFERENCE = ['jpg', 'png', 'webp', 'ico', 'gif', 'avif']` in `main.js` decides which target a dropped file is preselected, via `defaultTargetFor()`, rather than taking `targetsForInput(ext)[0]`.
+- **Alternatives:** keep the derived first target (the previous behaviour); ask the backend for a preferred default; make the choice depend on the input format.
+- **Why:** the matrix is derived from `getSupportedFormats()`, which returns **sorted** lists, so "the first target" was the alphabetically first - `avif` for every input except AVIF itself. That made AVIF the silent default for every file a user dropped: the slowest encoder here and the least compatible output for a general consumer, offered before they chose anything, with the quality slider appearing alongside it. A per-format table would reintroduce the duplicated-format-list problem Phase 1.1 deleted.
+- **Consequence:** adding an output format means adding it to `TARGET_PREFERENCE` or the `offered[0]` fallback decides instead. `tests/test_formats.py` pins that AVIF stays last and that the list covers every backend output; `scripts/check-frontend.js` executes the real `defaultTargetFor` and asserts the wiring, because the source-parsing test alone cannot catch a regression in `getDefaultTargetFormat`.
+
+## 2026-10-14 - PyInstaller is build tooling, not a runtime dependency
+
+- **Decision:** `pyinstaller` moves from `[project].dependencies` to `[dependency-groups].dev`. Runtime dependencies are `pillow` and `pywebview` again, as ARCHITECTURE decision 3 always stated.
+- **Alternatives:** leave it as a runtime dependency (status quo); keep it in both places.
+- **Why:** PyInstaller produces the frozen exe and is never imported by the running app, so declaring it a runtime requirement put a build tool and its dependency tree into every install of the package - directly contradicting the documented dependency policy. `uv sync` installs the default `dev` group, so the release workflow's `uv run pyinstaller flux.spec` is unaffected.
+- **Consequence:** `uv sync` still provisions PyInstaller for local builds and CI, so nothing in the pipeline changes. Anyone installing Flux as a package gets only what the app actually imports.
+
+## 2026-10-14 - The installer declares the architecture it builds
+
+- **Decision:** `installer/flux.iss` sets `ArchitecturesAllowed=x64compatible` and `ArchitecturesInstallIn64BitMode=x64compatible` - Inno's documented pair for a 64-bit-only app.
+- **Alternatives:** declare no architectures (status quo); `x64` alone; `win64`.
+- **Why:** `ArchitecturesAllowed`'s default depends on whether ISCC emits a 32-bit or a 64-bit Setup, and on a 32-bit Setup it defaults to `x86compatible` - which would install this x64 build on 32-bit Windows, where it then fails to launch. `x64compatible` covers x64 and Arm64 (which runs x64 under emulation), so it does not over-restrict.
+- **Consequence:** a 32-bit Windows user is refused at install time instead of getting a broken install. `tests/test_packaging.py` pins both directives, along with the manual-build fallback version, which had drifted to 0.1.0 because CI always overrides it with `/DMyAppVersion`.
+
+## 2026-10-14 - A behavioural frontend check belongs in check-frontend.js
+
+- **Decision:** `scripts/check-frontend.js` gained a check that extracts `TARGET_PREFERENCE` and `defaultTargetFor` from `main.js`, executes them, and asserts `getDefaultTargetFormat` calls the helper - alongside the existing syntax, template-compile and index-wiring checks.
+- **Alternatives:** rely on `tests/test_formats.py` (which parses the same source and compares the list in Python); accept that the wiring is unverified.
+- **Why:** a source-parsing test cannot catch a regression in the *wiring*. Reverting `getDefaultTargetFormat` to `return targets[0] || 'png'` left the pytest fully green while every dropped file preselected AVIF again - a reviewer caught exactly that, and the gap was real. Node can execute the shipped code, so the check runs the real function instead of a replica of it.
+- **Consequence:** the pytest now states plainly that it pins the list's contents and that the wiring is verified elsewhere, rather than implying it covers both. The two are complementary: the pytest knows the backend's `OUTPUT_FORMATS` (the authoritative list), the node check executes the frontend logic.
