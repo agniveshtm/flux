@@ -25,6 +25,7 @@ from flux.services.image_converter import (
     INPUT_FORMATS,
     OUTPUT_FORMATS,
     _avif_available,
+    _heif_available,
 )
 from flux.window import FluxAPI
 
@@ -61,6 +62,12 @@ def test_frontend_mock_matches_backend_formats() -> None:
         # list legitimately shrinks.
         inputs = [item for item in inputs if item != "avif"]
         outputs = [item for item in outputs if item != "avif"]
+
+    if not _heif_available():
+        # Same gate logic as AVIF: pillow-heif may be absent, and the mock
+        # staying static would advertise formats the app cannot handle.
+        inputs = [item for item in inputs if item not in ("heic", "heif")]
+        outputs = [item for item in outputs if item != "heic"]
 
     assert inputs == list(INPUT_FORMATS)
     assert outputs == list(OUTPUT_FORMATS)

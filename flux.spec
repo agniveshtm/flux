@@ -30,8 +30,16 @@ hiddenimports = collect_submodules("webview")
 # release smoke test (flux.exe --version) does not catch.
 # Executed by tests/test_packaging.py, which runs this function directly.
 def _pillow_heif_binaries() -> list[tuple[str, str]]:
-    """Locate pillow-heif's shared libraries for bundling."""
-    import pillow_heif
+    """Locate pillow-heif's shared libraries for bundling.
+
+    On a system without pillow-heif installed, returns []. PyInstaller builds
+    without error; HEIF simply won't be available in the frozen app (matching
+    the runtime availability gate in image_converter._heif_available()).
+    """
+    try:
+        import pillow_heif
+    except ModuleNotFoundError:
+        return []
 
     site_pkgs = os.path.dirname(os.path.dirname(pillow_heif.__file__))
     binaries: list[tuple[str, str]] = []

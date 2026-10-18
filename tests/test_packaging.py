@@ -16,6 +16,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from flux import __version__
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -75,6 +77,23 @@ def _spec_heif_binaries() -> list[tuple[str, str]]:
     fn = namespace["_pillow_heif_binaries"]
     assert callable(fn)
     return cast(Callable[[], list[tuple[str, str]]], fn)()
+
+
+def _heif_available() -> bool:
+    """Whether pillow-heif can be imported and registered."""
+    try:
+        import pillow_heif
+
+        pillow_heif.register_heif_opener()
+        return True
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _heif_available(),
+    reason="pillow-heif is not installed; HEIF support is unavailable on this build",
+)
 
 
 def test_spec_collects_pillow_heif_binaries() -> None:
