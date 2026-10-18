@@ -24,16 +24,39 @@ def _avif_available() -> bool:
         return False
 
 
+def _heif_available() -> bool:
+    """Whether pillow-heif is installed and its opener registered.
+
+    Unlike AVIF, HEIF requires a second runtime dependency: Pillow has no
+    native HEIF support, so pillow-heif registers an opener for .heic/.heif
+    files at import time. A build without the dependency simply does not offer
+    the format — the same capability-gate pattern as AVIF, so the UI never
+    shows a target this build cannot write.
+
+    Side effect: calling this registers the opener with Pillow (once), which
+    is required for HEIF I/O anyway. The gate and the registration are the
+    same operation because there is no way to check HEIF support without
+    installing the plugin first.
+    """
+    try:
+        import pillow_heif
+
+        pillow_heif.register_heif_opener()
+        return True
+    except Exception:
+        return False
+
+
 # The formats this converter can actually read and write. The frontend derives
 # its whole input->target matrix from getSupportedFormats(), so these two tuples
 # - not any frontend table - are the single source of truth for what Flux
 # supports. Each Phase 1.1 format adds itself here when its encoder lands.
 INPUT_FORMATS = ("jpg", "jpeg", "png", "webp", "ico", "gif") + (
     ("avif",) if _avif_available() else ()
-)
+) + (("heic", "heif") if _heif_available() else ())
 OUTPUT_FORMATS = ("jpg", "png", "webp", "ico", "gif") + (
     ("avif",) if _avif_available() else ()
-)
+) + (("heic",) if _heif_available() else ())
 
 
 # GIF marks transparency with a single fully-transparent palette index and has
@@ -213,6 +236,23 @@ class PillowImageConverter(BaseConverter):
             # its colour profile instead of being silently reinterpreted as
             # sRGB. There is nothing to pass here - carrying image.info through
             # the conversion is the whole mechanism.
+        elif target_format == "heic":
+            image = PillowImageConverter._rgb_or_rgba(image)
+            save_options.update(
+                {
+                    # pillow-heif registers the format ID "HEIF"; the target
+                    # name is "heic" (the extension iPhone users expect), but
+                    # the encoder is selected by format ID, not by extension.
+                    "format": "HEIF",
+                    # 90 matches the JPEG/WebP default - HEIF's lossy coding is
+                    # H.265/HEVC-based and roughly comparable to JPEG at the
+                    # same quality level, unlike AVIF which is denser.
+                    "quality": PillowImageConverter._integer_option(options, "quality", 90, 1, 100),
+                }
+            )
+            # pillow-heif's save() also honours image.info["icc_profile"] the
+            # same way Pillow's native writers do, so colour-profile carry-
+            # through needs nothing extra here either.
         else:
             # An explicit reject, so a format added to OUTPUT_FORMATS without an
             # encoder fails loudly instead of silently writing the previous

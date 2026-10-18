@@ -8,6 +8,7 @@
 # dist/flux-setup-<ver>.exe. Both artifacts are published by
 # .github/workflows/release.yml on every v* tag.
 
+import os
 from PyInstaller.utils.hooks import collect_submodules
 
 # pywebview resolves its platform backend by name at runtime (webview.util
@@ -19,11 +20,48 @@ from PyInstaller.utils.hooks import collect_submodules
 # lib/ data files (WebView2 interop DLLs) on top of this.
 hiddenimports = collect_submodules("webview")
 
+# pillow-heif's binaries do not sit inside the package directory, so
+# PyInstaller's static analysis misses the libraries: on Windows both parts
+# are at site-packages root (the native extension _pillow_heif.*.pyd and
+# libheif-<hash>.dll - nothing references the DLL statically), and on Linux
+# the extension is at root while libheif lives in pillow_heif.libs/ (the
+# auditwheel layout, with a versioned .so name). Without this collection the
+# frozen app would fail to open .heic files with a loader error that the
+# release smoke test (flux.exe --version) does not catch.
+# Executed by tests/test_packaging.py, which runs this function directly.
+def _pillow_heif_binaries() -> list[tuple[str, str]]:
+    """Locate pillow-heif's shared libraries for bundling.
+
+    On a system without pillow-heif installed, returns []. PyInstaller builds
+    without error; HEIF simply won't be available in the frozen app (matching
+    the runtime availability gate in image_converter._heif_available()).
+    """
+    try:
+        import pillow_heif
+    except ModuleNotFoundError:
+        return []
+
+    site_pkgs = os.path.dirname(os.path.dirname(pillow_heif.__file__))
+    binaries: list[tuple[str, str]] = []
+    for entry in os.listdir(site_pkgs):
+        if entry.startswith("_pillow_heif.") and entry.endswith((".pyd", ".so", ".dylib")):
+            binaries.append((os.path.join(site_pkgs, entry), "."))
+        elif entry.startswith("libheif-") and entry.endswith((".dll", ".so", ".dylib")):
+            binaries.append((os.path.join(site_pkgs, entry), "."))
+    # Linux: auditwheel moves the patched libraries into pillow_heif.libs/,
+    # mirrored here so the loader's relative RPATH keeps resolving.
+    libs_dir = os.path.join(site_pkgs, "pillow_heif.libs")
+    if os.path.isdir(libs_dir):
+        for entry in os.listdir(libs_dir):
+            binaries.append((os.path.join(libs_dir, entry), "pillow_heif.libs"))
+    return binaries
+
+
 a = Analysis(
     ["src/flux/main.py"],
     # src-layout: tells the analyzer where the `flux` package lives.
     pathex=["src"],
-    binaries=[],
+    binaries=_pillow_heif_binaries(),
     datas=[
         # Runtime static files, looked up through flux.main._bundled_path().
         # Modules imported from the bundle get __file__ = <_MEIPASS>/flux/...,

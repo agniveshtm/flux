@@ -2,14 +2,14 @@
 
 ## Overview
 
-Flux is a desktop file converter application for general consumers. It provides a simple, offline-first interface for converting between common image formats (JPG, PNG, WebP, ICO, AVIF and GIF). The application runs entirely offline, packaged as a native Windows installer.
+Flux is a desktop file converter application for general consumers. It provides a simple, offline-first interface for converting between common image formats (JPG, PNG, WebP, ICO, AVIF, GIF and HEIC/HEIF). The application runs entirely offline, packaged as a native Windows installer.
 
-**Tech Stack**: Python + pywebview (desktop shell), Vue 3 + Tailwind CSS (frontend, in `src/flux/frontend`), Pillow (image conversion), PyInstaller + Inno Setup (packaging).
+**Tech Stack**: Python + pywebview (desktop shell), Vue 3 + Tailwind CSS (frontend, in `src/flux/frontend`), Pillow + pillow-heif (image conversion), PyInstaller + Inno Setup (packaging).
 
 ## Goals
 
 - Provide a clean, CloudConvert-inspired UI (crimson-red + black theme with light/dark toggle) for file conversion
-- Support all six image formats in both directions (Phase 1.1): JPG, PNG, WebP, ICO, AVIF, GIF
+- Support all seven image formats in both directions (Phase 1.1 + 1.3): JPG, PNG, WebP, ICO, AVIF, GIF, HEIC
 - Work fully offline — no CDN dependencies, Vue vendored locally, Tailwind compiled via standalone CLI
 - Distribute via a single Windows installer (Inno Setup) built with PyInstaller
 - Keep conversion operations off the UI thread with progress reporting
@@ -40,6 +40,32 @@ Deliberate limits:
   cut at a threshold.
 - AVIF is encoded 8-bit by Pillow, so HDR *colour profiles* survive but 10-bit
   HDR encoding is not reachable.
+
+## Phase 1.3 — HEIF/HEIC support
+
+Extends the format matrix to seven formats (42 cross-pairs) by adding HEIC/HEIF
+— the container iPhone and Android camera apps produce. `.heic` and `.heif` are
+the same container and both are accepted as inputs; `heic` is the single
+canonical output (following the `jpeg`/`jpg` precedent).
+
+| Format | Notes |
+|--------|-------|
+| HEIC | HEVC/AV1-coded container via pillow-heif. Quality option; transparency and ICC preserved. `.heif` accepted as input alias. |
+
+Unlike AVIF, HEIF requires a second runtime dependency: **pillow-heif 1.8.1**
+(2.32 MB footprint) registers a Pillow opener for `.heic`/`.heif`. The format
+is capability-gated exactly like AVIF — a build without the dependency simply
+does not offer the target.
+
+Deliberate limits:
+
+- HEIF's lossy coding is H.265/HEVC-based and roughly JPEG-comparable at the
+  same quality level; quality defaults to 90 (matching JPEG/WebP, not AVIF's 80).
+- Multi-image HEIF sources (bursts) collapse to the first frame for non-GIF
+  targets, per the existing animation rule.
+- SVG was considered for this phase and excluded — both rasterizers
+  (cairosvg, svglib) require cairo, which is unavailable on the build host, and
+  raster→SVG output is a potrace-class tracing feature, not a converter feature.
 
 
 ## Non-Goals
@@ -84,3 +110,15 @@ Deliberate limits:
 - [x] Colour quality maintained for AVIF output (ICC/XMP carried through)
 - [x] Unit tests for the new format paths (`tests/test_image_converter.py`,
       `tests/test_formats.py`)
+
+## Phase 1.3 acceptance criteria
+
+- [x] HEIC and HEIF readable both ways, quality option honoured on write
+- [x] All 42 cross-pairs between the 7 formats verified
+- [x] Transparency preserved (except JPG, which has none)
+- [x] Multi-frame `.heic` → first frame, per the existing animation rule
+- [x] Installer growth ≤ 10 MB — pillow-heif is 2.32 MB, under the 100 MB cap
+- [x] `flux.spec` bundles libheif — pinned by `test_spec_collects_pillow_heif_binaries`
+- [x] AVIF output unchanged after registration (quality, speed, ICC)
+- [x] A build without pillow-heif runs and simply omits the format
+- [x] Tests pass on both CI legs

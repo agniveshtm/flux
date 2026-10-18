@@ -142,3 +142,21 @@ through as literals. Tested in Git Bash - curl receives exactly two arguments.
 - Packaging: PyInstaller moved out of runtime dependencies, the installer's fallback version corrected from 0.1.0, and the Inno script now declares the x64 architecture it actually builds (DECISIONS 2026-10-14).
 - Two follow-up review findings on those fixes: dropped rows with no path are no longer discarded by the duplicate check, and `check-frontend.js` now runs a behavioural check on the default-target derivation - reverting to `targets[0]` left the pytest green, which is what the review caught.
 - Raised the HEIF/HEIC/SVG issue, then scoped SVG out: neither rasterizer works on this host (cairosvg needs a native cairo library no wheel ships; svglib's renderer is cairo-backed too), and raster-to-SVG output cannot be done honestly.
+
+## 2026-10-15 (Phase 1.3 - HEIF/HEIC)
+
+- Implemented HEIF/HEIC conversion support, taking Flux from 6 to 7 formats (42 cross-pairs). SVG remains out of scope per the 2026-10-14 decision.
+
+- Added `pillow-heif>=1.8.1` as the second runtime dependency (deliberate exception to Architecture decision 3), capability-gated exactly like AVIF: a build without the dependency simply does not offer HEIF. Rationale in DECISIONS 2026-10-15.
+
+- `.heic` and `.heif` both accepted as inputs (same container); `heic` is the single canonical output, following the `jpeg`/`jpg` precedent. `normalize_format` and the frontend's `normalizeExt` both map `heif` ? `heic`.
+
+- HEIF save branch reuses the lossy quality path (default 90, matching JPEG/WebP rather than AVIF's 80 - HEVC coding is roughly JPEG-comparable).
+
+- `flux.spec` now collects pillow-heif's root-level binaries (`libheif-<hash>.dll` and `_pillow_heif.*.pyd`) explicitly - PyInstaller's static analysis would miss them, and a frozen exe without libheif fails to open `.heic` files while passing the `--version` smoke test. Pinned by `test_spec_collects_pillow_heif_binaries`.
+
+- Extended `window.py`'s preview allowlist and `pickFiles` filter, `main.js`'s `LOSSY_TARGETS` and `TARGET_PREFERENCE`, and `useFlux.js`'s dev mock - all four format touch points updated deliberately, as `test_formats.py` pins them.
+
+- Tests: 95 ? 110. New HEIF tests cover quality option, quality clamping, transparency preservation, dual-extension input, readback into every target, and the absence gate. All gates green: pytest 110 passed, frontend checks pass, pyright 0 errors, mypy clean.
+
+- Docs updated: PRD Phase 1.3 section and acceptance criteria, ARCHITECTURE runtime-dependency table, DECISIONS two new ADRs (pillow-heif dependency; HEIC canonical output).

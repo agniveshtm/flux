@@ -31,7 +31,7 @@ Object.entries(components).forEach(([name, component]) => {
 // Targets whose encoder takes a quality setting. Kept next to the option
 // wiring below because it is the one place that decides whether the slider is
 // worth showing; a target not listed here ignores a quality option.
-const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif']);
+const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif', 'heic']);
 
 // The order a dropped file's target is preselected from, most compatible first.
 //
@@ -42,7 +42,7 @@ const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif']);
 // for a general consumer, offered before they chose anything. This list makes
 // the choice explicit, and 'avif' sits last so it stays something the user
 // picks rather than something they are given.
-const TARGET_PREFERENCE = ['jpg', 'png', 'webp', 'ico', 'gif', 'avif'];
+const TARGET_PREFERENCE = ['jpg', 'png', 'webp', 'ico', 'gif', 'heic', 'avif'];
 
 // Which target to preselect for an input extension: the first preference the
 // matrix actually offers, never the input format itself. Falls back to the
@@ -62,10 +62,13 @@ const defaultTargetFor = (inputExt, targets) => {
 // (src/flux/converter.py). The picker hands back "jpeg" for .jpeg files while
 // the backend's format list is normalized to "jpg", so a dropped photo.jpeg has
 // to be looked up under "jpg" or it matches no entry and the row renders with
-// no selectable targets.
+// no selectable targets. The same applies to .heif files, which the backend
+// normalizes to "heic".
 const normalizeExt = (ext) => {
   const key = String(ext || '').trim().toLowerCase().replace(/^\./, '');
-  return key === 'jpeg' ? 'jpg' : key;
+  if (key === 'jpeg') return 'jpg';
+  if (key === 'heif') return 'heic';
+  return key;
 };
 
 // FileRow resolves a row's targets by the raw extension on its filename, and

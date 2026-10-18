@@ -25,6 +25,8 @@ def normalize_format(value: str) -> str:
     normalized = str(value).strip().lower().lstrip(".")
     if normalized == "jpeg":
         return "jpg"
+    if normalized == "heif":
+        return "heic"
     return normalized
 
 
