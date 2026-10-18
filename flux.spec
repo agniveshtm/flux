@@ -8,6 +8,7 @@
 # dist/flux-setup-<ver>.exe. Both artifacts are published by
 # .github/workflows/release.yml on every v* tag.
 
+import os
 from PyInstaller.utils.hooks import collect_submodules
 
 # pywebview resolves its platform backend by name at runtime (webview.util
@@ -19,11 +20,33 @@ from PyInstaller.utils.hooks import collect_submodules
 # lib/ data files (WebView2 interop DLLs) on top of this.
 hiddenimports = collect_submodules("webview")
 
+# pillow-heif ships two binary parts at site-packages *root*, not inside the
+# package directory: the native extension (_pillow_heif.*.pyd) and libheif
+# (libheif-<hash>.dll). PyInstaller's static analysis will find the .pyd when
+# pillow_heif is imported, but nothing references the DLL statically and it
+# is outside the package, so it would not be bundled - and the frozen app
+# would fail to open .heic files with a loader error that the release smoke
+# test (flux.exe --version) does not catch. Collect them explicitly.
+# Verified by tests/test_heif_packaging.py, which asserts both files resolve.
+def _pillow_heif_binaries() -> list[tuple[str, str]]:
+    """Locate pillow-heif's root-level binaries for bundling."""
+    import pillow_heif
+
+    site_pkgs = os.path.dirname(os.path.dirname(pillow_heif.__file__))
+    binaries: list[tuple[str, str]] = []
+    for entry in os.listdir(site_pkgs):
+        if entry.startswith("_pillow_heif.") and entry.endswith((".pyd", ".so")):
+            binaries.append((os.path.join(site_pkgs, entry), "."))
+        elif entry.startswith("libheif-") and entry.endswith((".dll", ".so", ".dylib")):
+            binaries.append((os.path.join(site_pkgs, entry), "."))
+    return binaries
+
+
 a = Analysis(
     ["src/flux/main.py"],
     # src-layout: tells the analyzer where the `flux` package lives.
     pathex=["src"],
-    binaries=[],
+    binaries=_pillow_heif_binaries(),
     datas=[
         # Runtime static files, looked up through flux.main._bundled_path().
         # Modules imported from the bundle get __file__ = <_MEIPASS>/flux/...,

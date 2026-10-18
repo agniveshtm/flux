@@ -157,3 +157,17 @@
 - **Alternatives:** rely on `tests/test_formats.py` (which parses the same source and compares the list in Python); accept that the wiring is unverified.
 - **Why:** a source-parsing test cannot catch a regression in the *wiring*. Reverting `getDefaultTargetFormat` to `return targets[0] || 'png'` left the pytest fully green while every dropped file preselected AVIF again - a reviewer caught exactly that, and the gap was real. Node can execute the shipped code, so the check runs the real function instead of a replica of it.
 - **Consequence:** the pytest now states plainly that it pins the list's contents and that the wiring is verified elsewhere, rather than implying it covers both. The two are complementary: the pytest knows the backend's `OUTPUT_FORMATS` (the authoritative list), the node check executes the frontend logic.
+
+## 2026-10-15 - Accept pillow-heif as HEIF's second runtime dependency
+
+- **Decision:** Add `pillow-heif>=1.8.1` to `[project].dependencies` (beside `pillow` and `pywebview`) and capability-gate HEIF exactly like AVIF: `_heif_available()` tries `import pillow_heif` + `register_heif_opener()` and omits the format on failure.
+- **Alternatives:** drop HEIF from scope (the pre-audit status quo); shell out to a bundled `heif-enc` CLI; require Pillow to grow native HEIF support.
+- **Why:** Pillow has no HEIF support of its own (`features.check("heif")` is `False`). `pillow-heif` was verified in a throwaway venv, not assumed: 752-byte round-trip with transparency, 2.32 MB installed footprint (well under the ≤10 MB acceptance criterion), AVIF unaffected after registration. This is a deliberate exception to Architecture decision 3's "runtime deps are Pillow + pywebview only" - the issue that proposed HEIF recommended accepting it, and the capability gate means a build without the dependency still runs (the format simply does not appear).
+- **Consequence:** `flux.spec` needs an explicit `binaries=` collection because pillow-heif ships `libheif-<hash>.dll` at site-packages root, not inside the package - PyInstaller's static analysis would miss it. Pinned by `test_spec_collects_pillow_heif_binaries`. The installer grows by ~2.32 MB per release.
+
+## 2026-10-15 - HEIC is the canonical HEIF output; both extensions are inputs
+
+- **Decision:** `.heic` and `.heif` are the same container. Both are accepted as inputs (`INPUT_FORMATS = (..., "heic", "heif")`), but only `heic` is offered as a target (`OUTPUT_FORMATS = (..., "heic")`). `normalize_format("heif")` returns `"heic"` (mirroring `jpeg` → `jpg`), and the frontend's `normalizeExt` does the same.
+- **Alternatives:** treat them as two distinct formats (8 outputs / 56 pairs); canonicalize to `heif` instead (pillow-heif's format ID); accept both as outputs.
+- **Why:** the `jpeg`/`jpg` precedent already established that one encoder means one canonical target name while multiple input extensions are accepted. `heic` is chosen over `heif` as the canonical because it is what iPhone users search for and expect; the underlying encoder is selected by format ID (`HEIF`), so the extension is purely a filename convention. Treating them as distinct would double the pair count for no functional gain - the same bytes are written either way.
+- **Consequence:** 7 formats / 42 cross-pairs, not 8 / 56. A `.heif` input dropped into the UI is looked up under `heic` via `normalizeExt`, so the row shows the correct target list. `test_formats.py` pins the mock, picker and preview allowlist to include both extensions.

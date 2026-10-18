@@ -313,7 +313,7 @@ class FluxAPI:
                 # Kept in step with image_converter.INPUT_FORMATS by
                 # tests/test_formats.py: a format missing here cannot be picked
                 # through the native dialog at all.
-                "Image files (*.jpg;*.jpeg;*.png;*.webp;*.ico;*.gif;*.avif)",
+                "Image files (*.jpg;*.jpeg;*.png;*.webp;*.ico;*.gif;*.avif;*.heic;*.heif)",
             ),
         )
         # Single-select yields a bare string while multi-select yields a tuple:
@@ -418,6 +418,8 @@ class FluxAPI:
         ".ico": "image/x-icon",
         ".avif": "image/avif",
         ".gif": "image/gif",
+        ".heic": "image/heic",
+        ".heif": "image/heif",
     }
 
     @staticmethod

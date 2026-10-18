@@ -177,19 +177,36 @@ class BaseConverter(ABC):
     ) -> ConversionResult: ...
 ```
 
-- **Phase 1.1**: `PillowImageConverter` implements `BaseConverter`, covering JPG, PNG,
-  WebP, ICO, AVIF and GIF. `INPUT_FORMATS` / `OUTPUT_FORMATS` in
-  `image_converter.py` declare what it can do, and the frontend derives its whole
-  input→target matrix from `getSupportedFormats()` — there is deliberately no
-  format table in the JS, so a format cannot be offered unless an encoder exists
-  for it. AVIF is gated on `PIL.features.check("avif")`, so a build without
-  libavif simply does not offer it.
+- **Phase 1.1 + 1.3**: `PillowImageConverter` implements `BaseConverter`, covering
+  JPG, PNG, WebP, ICO, AVIF, GIF and HEIC/HEIF. `INPUT_FORMATS` /
+  `OUTPUT_FORMATS` in `image_converter.py` declare what it can do, and the
+  frontend derives its whole input→target matrix from `getSupportedFormats()` —
+  there is deliberately no format table in the JS, so a format cannot be
+  offered unless an encoder exists for it. AVIF is gated on
+  `PIL.features.check("avif")`, so a build without libavif simply does not
+  offer it. HEIF is gated on a successful `pillow_heif.register_heif_opener()`,
+  so a build without pillow-heif simply does not offer it either. Both `.heic`
+  and `.heif` are accepted as inputs (same container); `heic` is the single
+  canonical output, following the `jpeg`/`jpg` precedent.
 - **Phase 2**: `FFmpegVideoConverter` will implement same interface; frontend contract unchanged
 - **Registry**: `ConverterRegistry` maps format → converter instance; `get_converter_for_format()` selects at runtime
 - **Encoder dispatch**: `_save` rejects any target with no encoder, rather than
   falling through to the last branch — otherwise a format added to
   `OUTPUT_FORMATS` without an encoder would write the previous format's bytes
   under the new extension.
+
+### Runtime dependencies
+
+The app's runtime dependencies are deliberately minimal (Architecture decision 3):
+
+| Dependency | Purpose | Notes |
+|------------|---------|-------|
+| `pillow` | Image decode/encode | AVIF ships inside Pillow ≥ 11.3 — no extra cost |
+| `pillow-heif` | HEIF/HEIC decode/encode | 2.32 MB; registers a Pillow opener. Capability-gated so a build without it still runs. |
+| `pywebview` | Desktop shell | Platform backend resolved at runtime |
+
+`pyinstaller` is **build tooling only** (in the `dev` dependency group) — it
+produces the frozen exe and is never imported by the running app.
 
 ## Folder Structure
 

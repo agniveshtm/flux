@@ -79,8 +79,8 @@ window.Flux.useFlux = function() {
 // lists to image_converter.INPUT_FORMATS/OUTPUT_FORMATS so this copy cannot
 // drift away from the encoders it shadows.
 const mockSupportedFormats = {
-  input: ['jpg', 'jpeg', 'png', 'webp', 'ico', 'gif', 'avif'],
-  output: ['jpg', 'png', 'webp', 'ico', 'gif', 'avif'],
+  input: ['jpg', 'jpeg', 'png', 'webp', 'ico', 'gif', 'avif', 'heic', 'heif'],
+  output: ['jpg', 'png', 'webp', 'ico', 'gif', 'avif', 'heic'],
 };
 
   const mockJobs = new Map();

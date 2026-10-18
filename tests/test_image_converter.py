@@ -25,6 +25,7 @@ from flux.services.image_converter import (
     OUTPUT_FORMATS,
     PillowImageConverter,
     _avif_available,
+    _heif_available,
 )
 
 
@@ -516,12 +517,106 @@ def test_avif_is_absent_from_the_matrix_without_an_encoder() -> None:
     assert ("avif" in OUTPUT_FORMATS) is _avif_available()
 
 
+# --- HEIF -------------------------------------------------------------------
+
+requires_heif = pytest.mark.skipif(
+    not _heif_available(), reason="pillow-heif is not installed"
+)
+
+
+@requires_heif
+def test_heif_quality_option_changes_output_size(
+    tmp_path: Path, converter: PillowImageConverter
+) -> None:
+    source = _write(tmp_path / "noise.png", _noise_image())
+
+    low = _convert(converter, source, tmp_path, "heic", {"quality": 20})
+    high = _convert(converter, source, tmp_path, "heic", {"quality": 90})
+
+    assert low.stat().st_size < high.stat().st_size
+
+
+@requires_heif
+def test_heif_quality_is_clamped(
+    tmp_path: Path, converter: PillowImageConverter
+) -> None:
+    source = _write(tmp_path / "noise.png", _noise_image())
+
+    over = _convert(converter, source, tmp_path, "heic", {"quality": 999})
+    at_max = _convert(converter, source, tmp_path, "heic", {"quality": 100})
+    under = _convert(converter, source, tmp_path, "heic", {"quality": -5})
+    at_min = _convert(converter, source, tmp_path, "heic", {"quality": 1})
+
+    assert over.read_bytes() == at_max.read_bytes()
+    assert under.read_bytes() == at_min.read_bytes()
+
+
+@requires_heif
+def test_heif_preserves_transparency(
+    tmp_path: Path, converter: PillowImageConverter
+) -> None:
+    source = _write(tmp_path / "alpha.png", _half_opaque())
+
+    output = _convert(converter, source, tmp_path, "heic")
+
+    with Image.open(output) as result:
+        assert result.format == "HEIF"
+        # Alpha in HEIF is lossy-compressed, so compare loosely rather than
+        # byte-for-byte like the AVIF test does.
+        opaque_alpha = _rgba_pixel(result, (8, 8))[3]
+        transparent_alpha = _rgba_pixel(result, (48, 8))[3]
+        assert opaque_alpha > 240, f"expected opaque, got alpha={opaque_alpha}"
+        assert transparent_alpha < 15, f"expected transparent, got alpha={transparent_alpha}"
+
+
+@requires_heif
+def test_heif_reads_heif_extension_input(
+    tmp_path: Path, converter: PillowImageConverter
+) -> None:
+    # .heif and .heic are the same container; both must be accepted as inputs.
+    source = _write(tmp_path / "in.png", Image.new("RGBA", (64, 64), (10, 200, 50, 180)))
+    heif_file = _convert(converter, source, tmp_path, "heic")
+
+    # Rename to .heif and convert again - the extension should not matter.
+    heif_renamed = tmp_path / "in.heif"
+    heif_file.rename(heif_renamed)
+
+    output = _convert(converter, heif_renamed, tmp_path, "png")
+
+    with Image.open(output) as result:
+        assert result.format == "PNG"
+        assert result.size == (64, 64)
+
+
+@requires_heif
+@pytest.mark.parametrize("target", OUTPUT_FORMATS)
+def test_heif_is_readable_as_a_conversion_input(
+    tmp_path: Path, converter: PillowImageConverter, target: str
+) -> None:
+    # 256px, so the ICO branch can embed its full 256x256 frame and every
+    # target agrees on the dimensions.
+    source = _write(tmp_path / "in.png", Image.new("RGBA", (256, 256), (30, 140, 90, 255)))
+    heic_file = _convert(converter, source, tmp_path, "heic")
+
+    output = _convert(converter, heic_file, tmp_path, target)
+
+    with Image.open(output) as result:
+        assert result.size == (256, 256)
+
+
+def test_heif_is_absent_from_the_matrix_without_the_dependency() -> None:
+    # Deliberately NOT guarded by requires_heif: that skip fires exactly when
+    # the dependency is missing, which is the only case this test exists to
+    # cover. The assertion holds either way, so it must run unconditionally.
+    assert ("heic" in OUTPUT_FORMATS) is _heif_available()
+
+
 # --- shared behaviour -------------------------------------------------------
 
 
 # Pillow's own format identifiers, which are not always the extension:
-# a .jpg file reports itself as "JPEG".
-_EXPECTED_CONTAINER = {"jpg": "JPEG"}
+# a .jpg file reports itself as "JPEG", and .heic reports as "HEIF".
+_EXPECTED_CONTAINER = {"jpg": "JPEG", "heic": "HEIF"}
 
 
 @pytest.mark.parametrize("target", OUTPUT_FORMATS)
