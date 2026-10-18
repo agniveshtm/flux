@@ -53,32 +53,50 @@ def test_installer_declares_the_built_architecture() -> None:
     assert "ArchitecturesInstallIn64BitMode=x64compatible" in source
 
 
-def test_spec_collects_pillow_heif_binaries() -> None:
-    """flux.spec must bundle pillow-heif's root-level binaries.
+def _spec_heif_binaries() -> list[tuple[str, str]]:
+    """Execute flux.spec's _pillow_heif_binaries() for this platform.
 
-    pillow_heif ships its native extension and libheif at site-packages root,
-    not inside the package directory. PyInstaller's static analysis finds the
-    .pyd when pillow_heif is imported (it is referenced from Python), but
-    nothing references libheif-*.dll statically - so without an explicit
-    binaries= entry the frozen exe would fail to open .heic files while
-    passing the --version smoke test.
+    The function is extracted from the spec source rather than imported,
+    because importing flux.spec would run PyInstaller's Analysis at module
+    level. Executing the shipped function (rather than re-deriving its globs
+    here) is what makes this a behavioural check: a regression in the spec's
+    collection logic fails this test on both OS legs.
     """
-    import pillow_heif
+    import os
+    from typing import Any, Callable, cast
 
-    site_pkgs = Path(pillow_heif.__file__).resolve().parent.parent
-    libheif = list(site_pkgs.glob("libheif-*.dll")) + list(site_pkgs.glob("libheif-*.so"))
-    pyd = list(site_pkgs.glob("_pillow_heif.*.pyd")) + list(site_pkgs.glob("_pillow_heif.*.so"))
-
-    assert libheif, f"libheif binary not found in {site_pkgs}"
-    assert pyd, f"_pillow_heif extension not found in {site_pkgs}"
-
-    # The spec must reference a binaries= collection that would pick these up.
     source = SPEC.read_text(encoding="utf-8")
-    assert "_pillow_heif_binaries" in source, (
-        "flux.spec does not call _pillow_heif_binaries(); libheif would not "
-        "be bundled and the frozen exe could not open .heic files"
+    match = re.search(
+        r"(?ms)^def _pillow_heif_binaries\(\).*?(?=^\S|\Z)", source
     )
-    assert "binaries=_pillow_heif_binaries()" in source, (
-        "flux.spec defines _pillow_heif_binaries but does not pass it to "
-        "Analysis(binaries=...)"
+    assert match, "_pillow_heif_binaries not found in flux.spec"
+    namespace: dict[str, Any] = {"os": os}
+    exec(compile(match.group(0), str(SPEC), "exec"), namespace)
+    fn = namespace["_pillow_heif_binaries"]
+    assert callable(fn)
+    return cast(Callable[[], list[tuple[str, str]]], fn)()
+
+
+def test_spec_collects_pillow_heif_binaries() -> None:
+    """flux.spec must bundle pillow-heif's native extension and libheif.
+
+    pillow-heif's libraries do not sit inside the package directory: on
+    Windows both parts are at site-packages root (_pillow_heif.*.pyd and
+    libheif-<hash>.dll); on Linux the extension is at root while libheif
+    lives in pillow_heif.libs/ under a versioned name (auditwheel). PyInstaller's
+    static analysis references the extension but not the library, so without
+    the spec's explicit collection the frozen exe would fail to open .heic
+    files while passing the --version smoke test.
+    """
+    binaries = _spec_heif_binaries()
+    names = [Path(src).name for src, _dest in binaries]
+
+    assert any(name.startswith("_pillow_heif.") for name in names), (
+        f"no _pillow_heif native extension collected from {names}"
     )
+    assert any("libheif" in name for name in names), (
+        f"no libheif library collected from {names}"
+    )
+    for src, dest in binaries:
+        assert Path(src).is_file(), f"collected binary does not exist: {src}"
+        assert dest, f"collected binary has no destination: {src}"

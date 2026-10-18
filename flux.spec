@@ -20,25 +20,32 @@ from PyInstaller.utils.hooks import collect_submodules
 # lib/ data files (WebView2 interop DLLs) on top of this.
 hiddenimports = collect_submodules("webview")
 
-# pillow-heif ships two binary parts at site-packages *root*, not inside the
-# package directory: the native extension (_pillow_heif.*.pyd) and libheif
-# (libheif-<hash>.dll). PyInstaller's static analysis will find the .pyd when
-# pillow_heif is imported, but nothing references the DLL statically and it
-# is outside the package, so it would not be bundled - and the frozen app
-# would fail to open .heic files with a loader error that the release smoke
-# test (flux.exe --version) does not catch. Collect them explicitly.
-# Verified by tests/test_heif_packaging.py, which asserts both files resolve.
+# pillow-heif's binaries do not sit inside the package directory, so
+# PyInstaller's static analysis misses the libraries: on Windows both parts
+# are at site-packages root (the native extension _pillow_heif.*.pyd and
+# libheif-<hash>.dll - nothing references the DLL statically), and on Linux
+# the extension is at root while libheif lives in pillow_heif.libs/ (the
+# auditwheel layout, with a versioned .so name). Without this collection the
+# frozen app would fail to open .heic files with a loader error that the
+# release smoke test (flux.exe --version) does not catch.
+# Executed by tests/test_packaging.py, which runs this function directly.
 def _pillow_heif_binaries() -> list[tuple[str, str]]:
-    """Locate pillow-heif's root-level binaries for bundling."""
+    """Locate pillow-heif's shared libraries for bundling."""
     import pillow_heif
 
     site_pkgs = os.path.dirname(os.path.dirname(pillow_heif.__file__))
     binaries: list[tuple[str, str]] = []
     for entry in os.listdir(site_pkgs):
-        if entry.startswith("_pillow_heif.") and entry.endswith((".pyd", ".so")):
+        if entry.startswith("_pillow_heif.") and entry.endswith((".pyd", ".so", ".dylib")):
             binaries.append((os.path.join(site_pkgs, entry), "."))
         elif entry.startswith("libheif-") and entry.endswith((".dll", ".so", ".dylib")):
             binaries.append((os.path.join(site_pkgs, entry), "."))
+    # Linux: auditwheel moves the patched libraries into pillow_heif.libs/,
+    # mirrored here so the loader's relative RPATH keeps resolving.
+    libs_dir = os.path.join(site_pkgs, "pillow_heif.libs")
+    if os.path.isdir(libs_dir):
+        for entry in os.listdir(libs_dir):
+            binaries.append((os.path.join(libs_dir, entry), "pillow_heif.libs"))
     return binaries
 
 
