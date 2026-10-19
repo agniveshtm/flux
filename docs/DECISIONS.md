@@ -171,3 +171,10 @@
 - **Alternatives:** treat them as two distinct formats (8 outputs / 56 pairs); canonicalize to `heif` instead (pillow-heif's format ID); accept both as outputs.
 - **Why:** the `jpeg`/`jpg` precedent already established that one encoder means one canonical target name while multiple input extensions are accepted. `heic` is chosen over `heif` as the canonical because it is what iPhone users search for and expect; the underlying encoder is selected by format ID (`HEIF`), so the extension is purely a filename convention. Treating them as distinct would double the pair count for no functional gain - the same bytes are written either way.
 - **Consequence:** 7 formats / 42 cross-pairs, not 8 / 56. A `.heif` input dropped into the UI is looked up under `heic` via `normalizeExt`, so the row shows the correct target list. `test_formats.py` pins the mock, picker and preview allowlist to include both extensions.
+
+## 2026-10-19 - pillow-heif import is optional in the spec
+
+- **Decision:** Wrap `import pillow_heif` in `try/except ModuleNotFoundError` inside `_pillow_heif_binaries()`. If absent, the function returns `[]`, allowing PyInstaller to build successfully with HEIF simply unbundled.
+- **Alternatives:** Require pillow-heif in the build venv (adding friction for builds that intentionally omit HEIF); fail fast with a clear error message.
+- **Why:** HEIF support is capability-gated at runtime (`_heif_available()` catches missing pillow-heif). The PyInstaller spec should reflect this: if dependency intentionally excluded, build should still succeed with HEIF omitted. Requiring the package would make the build brittle against optional dependencies, contradicting the capabilaty-gate pattern.
+- **Consequence:** `uv run pyinstaller flux.spec` succeeds without pillow-heif; the frozen exe simply lacks HEIF support. CI always installs the runtime deps via `uv sync`, so this primarily helps local builds or CI variants that skip optional features.
