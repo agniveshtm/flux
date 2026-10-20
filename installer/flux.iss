@@ -9,7 +9,7 @@
 ; .github/workflows/release.yml passes the tag version. The fallback below
 ; only serves manual local builds - keep it in sync with pyproject.toml.
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.1"
+  #define MyAppVersion "0.3.0"
 #endif
 
 #define MyAppName "Flux"
