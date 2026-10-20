@@ -160,3 +160,11 @@ through as literals. Tested in Git Bash - curl receives exactly two arguments.
 - Tests: 95 ? 110. New HEIF tests cover quality option, quality clamping, transparency preservation, dual-extension input, readback into every target, and the absence gate. All gates green: pytest 110 passed, frontend checks pass, pyright 0 errors, mypy clean.
 
 - Docs updated: PRD Phase 1.3 section and acceptance criteria, ARCHITECTURE runtime-dependency table, DECISIONS two new ADRs (pillow-heif dependency; HEIC canonical output).
+
+## 2026-10-19 (Code review fixes)
+
+- Fixed two issues flagged during review of the HEIF/HEIC feature:
+
+  1. **flux.spec: pillow-heif import is now guarded.** The `_pillow_heif_binaries()` function wrapped `import pillow_heif` in try/except, returning `[]` when the package is absent. This prevents PyInstaller builds from failing before the app can apply its runtime gate.
+
+  2. **test_formats.py: added HEIF gateway handling.** `test_frontend_mock_matches_backend_formats` now strips heic/heif from the mock when `_heif_available()` is false, matching AVIF's treatment. Without this, a dev environment missing pillow-heif would see stale entries in the browser fallback picker.
