@@ -5,7 +5,7 @@ description = "flux - A Webview app built for file conversions."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "pillow>=12.3.0",
+    "pillow>=13.0.0",
     "pillow-heif>=1.8.1",
     "pywebview>=6.2.1",
 ]
