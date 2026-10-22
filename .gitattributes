@@ -1,0 +1,25 @@
+# Binary assets must never be touched by git's end-of-line conversion.
+#
+# The bundled font is the case that matters: with core.autocrlf=true (the
+# default on Windows) a checkout rewrites the bytes of Inter-Variable.ttf, and
+# the browser then fails to decode it - the app silently falls back to
+# system-ui and the whole design system is lost. The same conversion would
+# eventually corrupt the icons and the release artifacts.
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.avif binary
+*.heic binary
+*.zip binary
+*.7z binary
+*.exe binary
+*.dll binary
+*.pyd binary
+*.so binary
