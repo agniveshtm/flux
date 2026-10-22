@@ -51,6 +51,16 @@ def _js_format_lists() -> dict[str, list[str]]:
     return lists
 
 
+def _js_format_kinds() -> dict[str, str]:
+    """Pull mockSupportedFormats' kinds map out of useFlux.js."""
+    source = USE_FLUX.read_text(encoding="utf-8")
+    match = re.search(r"kinds\s*:\s*\{(?P<body>[^}]*)\}", source, re.DOTALL)
+    assert match, "mockSupportedFormats.kinds not found in useFlux.js"
+    return dict(
+        re.findall(r"['\"]?([A-Za-z0-9_]+)['\"]?\s*:\s*['\"]([^'\"]+)['\"]", match.group("body"))
+    )
+
+
 def test_frontend_mock_matches_backend_formats() -> None:
     lists = _js_format_lists()
     inputs, outputs = lists["input"], lists["output"]
@@ -71,6 +81,26 @@ def test_frontend_mock_matches_backend_formats() -> None:
 
     assert inputs == list(INPUT_FORMATS)
     assert outputs == list(OUTPUT_FORMATS)
+
+
+def test_frontend_mock_kinds_match_the_backend() -> None:
+    """The kinds map must cover exactly the formats the backend can write.
+
+    The UI groups the formats it offers by kind - the format picker shows
+    image and video formats as separate sets - so the mock's map is a second
+    copy of the backend's converter registry. If a format is missing from it
+    the picker would drop that format; if it names a format the backend
+    cannot write, the picker would offer a target that does not exist.
+    """
+    kinds = _js_format_kinds()
+
+    assert set(kinds) == set(OUTPUT_FORMATS), (
+        f"mock kinds cover {sorted(kinds)}, backend outputs {sorted(OUTPUT_FORMATS)}"
+    )
+    assert set(kinds.values()) == {"image"}, (
+        "the only converter registered writes images; a kind other than "
+        "'image' here would advertise a format the app cannot produce"
+    )
 
 
 def test_picker_offers_every_supported_input_format() -> None:

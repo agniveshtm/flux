@@ -687,47 +687,6 @@ video {
   background-color: var(--color-accent-tint);
 }
 
-.input-select {
-  width: 100%;
-  border-radius: 0.5rem;
-  background-color: var(--color-surface);
-  padding-left: 0.75rem;
-  padding-right: 0.75rem;
-  padding-top: 0.5rem;
-  padding-bottom: 0.5rem;
-  font-size: 0.875rem;
-  line-height: 1.5;
-  color: var(--color-text);
-}
-
-.input-select::-moz-placeholder {
-  color: var(--color-muted);
-}
-
-.input-select::placeholder {
-  color: var(--color-muted);
-}
-
-.input-select {
-  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
-  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  transition-duration: 150ms;
-}
-
-.input-select:focus {
-  border-color: transparent;
-  outline: 2px solid transparent;
-  outline-offset: 2px;
-  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
-  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);
-  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
-  --tw-ring-color: var(--color-accent);
-}
-
-.input-select {
-  border-color: var(--color-border);
-}
-
 .badge {
   display: inline-flex;
   align-items: center;
@@ -856,6 +815,14 @@ video {
   background-color: var(--color-accent);
 }
 
+.pointer-events-none {
+  pointer-events: none;
+}
+
+.fixed {
+  position: fixed;
+}
+
 .absolute {
   position: absolute;
 }
@@ -866,6 +833,10 @@ video {
 
 .sticky {
   position: sticky;
+}
+
+.inset-0 {
+  inset: 0px;
 }
 
 .bottom-0 {
@@ -892,6 +863,14 @@ video {
   z-index: 20;
 }
 
+.z-40 {
+  z-index: 40;
+}
+
+.m-auto {
+  margin: auto;
+}
+
 .mx-auto {
   margin-left: auto;
   margin-right: auto;
@@ -910,10 +889,6 @@ video {
   margin-bottom: 0.75rem;
 }
 
-.mb-4 {
-  margin-bottom: 1rem;
-}
-
 .mt-1 {
   margin-top: 0.25rem;
 }
@@ -930,12 +905,20 @@ video {
   margin-top: 0.75rem;
 }
 
+.block {
+  display: block;
+}
+
 .flex {
   display: flex;
 }
 
 .table {
   display: table;
+}
+
+.grid {
+  display: grid;
 }
 
 .h-10 {
@@ -954,6 +937,10 @@ video {
   height: 4.5rem;
 }
 
+.h-3\.5 {
+  height: 0.875rem;
+}
+
 .h-4 {
   height: 1rem;
 }
@@ -964,6 +951,14 @@ video {
 
 .h-8 {
   height: 2rem;
+}
+
+.h-9 {
+  height: 2.25rem;
+}
+
+.h-\[48px\] {
+  height: 48px;
 }
 
 .h-full {
@@ -978,8 +973,8 @@ video {
   min-height: 0px;
 }
 
-.min-h-\[180px\] {
-  min-height: 180px;
+.min-h-\[84px\] {
+  min-height: 84px;
 }
 
 .w-10 {
@@ -992,6 +987,10 @@ video {
 
 .w-16 {
   width: 4rem;
+}
+
+.w-3\.5 {
+  width: 0.875rem;
 }
 
 .w-32 {
@@ -1022,6 +1021,10 @@ video {
   width: 20rem;
 }
 
+.w-\[48px\] {
+  width: 48px;
+}
+
 .w-auto {
   width: auto;
 }
@@ -1032,10 +1035,6 @@ video {
 
 .min-w-0 {
   min-width: 0px;
-}
-
-.min-w-\[120px\] {
-  min-width: 120px;
 }
 
 .min-w-\[240px\] {
@@ -1050,6 +1049,10 @@ video {
   max-width: 360px;
 }
 
+.max-w-full {
+  max-width: 100%;
+}
+
 .flex-1 {
   flex: 1 1 0%;
 }
@@ -1062,6 +1065,11 @@ video {
   table-layout: fixed;
 }
 
+.rotate-180 {
+  --tw-rotate: 180deg;
+  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -1072,10 +1080,26 @@ video {
   animation: spin 1s linear infinite;
 }
 
+.cursor-not-allowed {
+  cursor: not-allowed;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
 .select-none {
   -webkit-user-select: none;
      -moz-user-select: none;
           user-select: none;
+}
+
+.resize {
+  resize: both;
+}
+
+.grid-cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .flex-col {
@@ -1104,6 +1128,10 @@ video {
 
 .justify-between {
   justify-content: space-between;
+}
+
+.gap-1\.5 {
+  gap: 0.375rem;
 }
 
 .gap-2 {
@@ -1144,6 +1172,10 @@ video {
   border-radius: 0.25rem;
 }
 
+.rounded-full {
+  border-radius: 9999px;
+}
+
 .rounded-lg {
   border-radius: 0.5rem;
 }
@@ -1160,8 +1192,16 @@ video {
   border-top-width: 1px;
 }
 
+.border-accent {
+  border-color: var(--color-accent);
+}
+
 .border-line {
   border-color: var(--color-border);
+}
+
+.bg-accent {
+  background-color: var(--color-accent);
 }
 
 .bg-bg {
@@ -1193,12 +1233,12 @@ video {
   padding: 0.5rem;
 }
 
-.p-4 {
-  padding: 1rem;
+.p-3 {
+  padding: 0.75rem;
 }
 
-.p-6 {
-  padding: 1.5rem;
+.p-4 {
+  padding: 1rem;
 }
 
 .px-2 {
@@ -1214,6 +1254,11 @@ video {
 .px-4 {
   padding-left: 1rem;
   padding-right: 1rem;
+}
+
+.px-6 {
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
 }
 
 .py-1 {
@@ -1258,13 +1303,18 @@ video {
   text-align: right;
 }
 
-.text-4xl {
-  font-size: 2.25rem;
-  line-height: 2.5rem;
+.text-2xl {
+  font-size: 1.5rem;
+  line-height: 2rem;
 }
 
 .text-base {
   font-size: 1rem;
+  line-height: 1.5;
+}
+
+.text-lg {
+  font-size: 1.125rem;
   line-height: 1.5;
 }
 
@@ -1281,6 +1331,10 @@ video {
 .text-xs {
   font-size: 0.75rem;
   line-height: 1.5;
+}
+
+.font-bold {
+  font-weight: 700;
 }
 
 .font-medium {
@@ -1312,8 +1366,20 @@ video {
   letter-spacing: -0.025em;
 }
 
+.tracking-tighter {
+  letter-spacing: -0.05em;
+}
+
+.tracking-wide {
+  letter-spacing: 0.025em;
+}
+
 .tracking-wider {
   letter-spacing: 0.05em;
+}
+
+.tracking-widest {
+  letter-spacing: 0.1em;
 }
 
 .text-accent {
@@ -1331,6 +1397,11 @@ video {
 
 .text-muted {
   color: var(--color-muted);
+}
+
+.text-on-accent {
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
 }
 
 .text-success {
@@ -1352,6 +1423,10 @@ video {
 
 .opacity-25 {
   opacity: 0.25;
+}
+
+.opacity-50 {
+  opacity: 0.5;
 }
 
 .opacity-75 {
@@ -1382,6 +1457,12 @@ video {
 
 .transition-opacity {
   transition-property: opacity;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+.transition-transform {
+  transition-property: transform;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   transition-duration: 150ms;
 }
@@ -1508,6 +1589,43 @@ body {
 
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-muted);
+}
+
+/* ------------------------------------------------------------------ */
+
+/* Format tiles (FormatTiles)                                          */
+
+/* The global :focus-visible rule sets a 0.375rem radius on the focus */
+
+/* ring, which would square off a 0.5rem tile - so the tile's own    */
+
+/* radius is restored here. Unlayered, like the rule it corrects for:  */
+
+/* layered rules lose to it.                                           */
+
+/* ------------------------------------------------------------------ */
+
+.format-tile:focus-visible {
+  border-radius: 0.5rem;
+}
+
+/* The row's target-format picker (FormatSelect). Same correction for its
+   trigger button, which is also a 0.5rem rounded control. */
+
+.format-pick:focus-visible {
+  border-radius: 0.5rem;
+}
+
+/* The picker's popover. It is position: fixed (it has to escape the file
+   list's two overflow containers), so it needs its own shadow - a black
+   shadow is invisible on the dark theme's background. */
+
+.format-pop {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.dark .format-pop {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1765,6 +1883,42 @@ body {
   outline-offset: 2px;
 }
 
+.hover\:border-accent:hover {
+  border-color: var(--color-accent);
+}
+
 .hover\:bg-surface-2:hover {
   background-color: var(--color-surface-2);
+}
+
+.hover\:text-accent:hover {
+  color: var(--color-accent);
+}
+
+.focus-visible\:ring-2:focus-visible {
+  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
+}
+
+.focus-visible\:ring-accent:focus-visible {
+  --tw-ring-color: var(--color-accent);
+}
+
+.focus-visible\:ring-offset-2:focus-visible {
+  --tw-ring-offset-width: 2px;
+}
+
+.active\:scale-95:active {
+  --tw-scale-x: .95;
+  --tw-scale-y: .95;
+  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
+}
+
+.disabled\:cursor-not-allowed:disabled {
+  cursor: not-allowed;
+}
+
+.disabled\:opacity-50:disabled {
+  opacity: 0.5;
 }

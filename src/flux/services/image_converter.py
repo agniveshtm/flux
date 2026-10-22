@@ -80,6 +80,10 @@ _GIF_TRANSPARENT_MASK_LUT = [
 
 class PillowImageConverter(BaseConverter):
     @property
+    def kind(self) -> str:
+        return "image"
+
+    @property
     def supported_input_formats(self) -> list[str]:
         return list(INPUT_FORMATS)
 

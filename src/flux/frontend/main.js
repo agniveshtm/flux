@@ -12,6 +12,7 @@ const components = {
   AppHeader: window.Flux.AppHeader,
   Branding: window.Flux.Branding,
   DropZone: window.Flux.DropZone,
+  FormatDonut: window.Flux.FormatDonut,
   FileList: window.Flux.FileList,
   FileRow: window.Flux.FileRow,
   FormatSelect: window.Flux.FormatSelect,
@@ -100,6 +101,11 @@ const App = {
 
     const files = ref([]);
     const supportedFormats = ref({});
+    // Which converter writes each output format ('image', 'video'), as
+    // reported by the backend. The format picker groups the formats it
+    // offers by this, so it has to come from the backend rather than from
+    // a list of extensions kept here.
+    const formatKinds = ref({});
     // Every format the backend can write, and the seed for the input->target
     // matrix below. Kept separate from supportedFormats (which is that matrix,
     // keyed by input) because the two answer different questions.
@@ -117,6 +123,10 @@ const App = {
     const isConverting = ref(false);
     const activeJobs = ref(new Map());
     const progressTimers = ref(new Map());
+
+    // The target the user picked from the format tiles. Null means they have
+    // not picked one, and every row keeps its own per-row choice.
+    const bulkTarget = ref(null);
 
     // --- Conversion options -----------------------------------------------
     // qualityOverride is null until the user actually moves the slider. Sending
@@ -142,6 +152,16 @@ const App = {
     });
 
     const showDitherOption = computed(() => pendingTargets.value.has('gif'));
+
+    // The format slice that is highlighted. The bulk pick wins when there is
+    // one, so a tile the user just pressed stays lit even if the first row
+    // was left alone (a row already in that format is never retargeted to
+    // itself - see handleSelectTarget).
+    const activeTarget = computed(() => {
+      if (bulkTarget.value) return bulkTarget.value;
+      const pending = files.value.find((file) => file.status !== 'done');
+      return pending ? pending.targetFormat : '';
+    });
 
     function handleQualityChange(value) {
       qualityOverride.value = value;
@@ -336,6 +356,7 @@ const App = {
         // the backend's declared formats rather than a hand-maintained table.
         const inputs = (formats.input || []).map(normalizeExt);
         supportedOutputs.value = (formats.output || []).map(normalizeExt);
+        formatKinds.value = formats.kinds || {};
         const mapping = {};
         inputs.forEach(input => {
           mapping[input] = targetsForInput(input);
@@ -458,6 +479,12 @@ const App = {
     }
 
     function getDefaultTargetFormat(inputExt) {
+      // A bulk pick from the format tiles wins over the per-extension
+      // preference, except when the file is already in that format.
+      const key = normalizeExt(inputExt);
+      if (bulkTarget.value && bulkTarget.value !== key) {
+        return bulkTarget.value;
+      }
       return defaultTargetFor(inputExt, targetsForInput(inputExt));
     }
 
@@ -472,6 +499,25 @@ const App = {
       if (files.value[index]) {
         files.value[index].targetFormat = format;
       }
+    }
+
+    // Bulk retarget from the format tiles: every row that is still pending
+    // switches to the picked format, and the pick also becomes the default
+    // for files added afterwards.
+    //
+    // A row whose input is already that format is left alone - converting a
+    // PNG to PNG is the no-op the matrix deliberately never offers
+    // (see targetsForInput), so honouring the pick there would put a target
+    // the dropdown does not even list on the row.
+    function handleSelectTarget(format) {
+      const key = normalizeExt(format);
+      bulkTarget.value = key;
+      files.value.forEach((file) => {
+        if (file.status === 'done') return;
+        const input = normalizeExt(file.name.split('.').pop() || '');
+        if (input === key) return;
+        file.targetFormat = key;
+      });
     }
 
     function forgetOutputDir() {
@@ -806,6 +852,13 @@ const App = {
       toggleTheme,
       files,
       supportedFormats,
+      // The raw list of formats the backend can write, kept separate from
+      // supportedFormats (the input->target matrix). The format picker
+      // renders from this, so it has to leave setup() - it is the only thing
+      // in the UI that shows the backend's output list rather than the
+      // matrix.
+      supportedOutputs,
+      formatKinds,
       outputDir,
       isDragOver,
       isConverting,
@@ -813,6 +866,7 @@ const App = {
       showQualityOption,
       qualityOverride,
       dither,
+      activeTarget,
       handleQualityChange,
       handleQualityReset,
       handleDitherChange,
@@ -826,6 +880,7 @@ const App = {
       addFiles,
       removeFile,
       updateFormat,
+      handleSelectTarget,
       handleConvertAll,
       handlePickFiles,
       handlePickOutputDir,
@@ -873,14 +928,26 @@ const App = {
       />
       <main class="flex-1 flex flex-col overflow-hidden px-4 py-4 gap-4 min-h-0 w-full">
         <Branding :theme="theme" />
-        <DropZone
-          :is-drag-over="isDragOver"
-          :is-disabled="isConverting"
-          @drop="handleDrop"
-          @click="handleDropZoneClick"
-          @dragover="handleDragOver"
-          @dragleave="handleDragLeave"
-        />
+        <!-- The drop area and the format picker share a row as two equal
+             wings: a grid rather than flex, so the split is exactly half
+             and the two panels end up with the same aspect ratio. -->
+        <div class="grid grid-cols-2 gap-4 flex-shrink-0">
+          <DropZone
+            :is-drag-over="isDragOver"
+            :is-disabled="isConverting"
+            @drop="handleDrop"
+            @click="handleDropZoneClick"
+            @dragover="handleDragOver"
+            @dragleave="handleDragLeave"
+          />
+          <FormatDonut
+            :formats="supportedOutputs"
+            :kinds="formatKinds"
+            :active="activeTarget"
+            :disabled="isConverting"
+            @select="handleSelectTarget"
+          />
+        </div>
         <FileList
           :files="files"
           :supported-formats="supportedFormats"

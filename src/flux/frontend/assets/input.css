@@ -122,11 +122,6 @@ body {
     @apply btn bg-transparent text-accent hover:bg-accent-tint active:bg-accent-tint;
   }
 
-  .input-select {
-    @apply w-full px-3 py-2 text-sm bg-surface rounded-lg text-fg placeholder-muted focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent transition-colors duration-150;
-    border-color: var(--color-border);
-  }
-
   .badge {
     @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
   }
@@ -178,6 +173,35 @@ body {
   .progress-bar-fill.error {
     @apply bg-accent;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Format tiles (FormatTiles)                                          */
+/* The global :focus-visible rule sets a 0.375rem radius on the focus */
+/* ring, which would square off a 0.5rem tile - so the tile's own    */
+/* radius is restored here. Unlayered, like the rule it corrects for:  */
+/* layered rules lose to it.                                           */
+/* ------------------------------------------------------------------ */
+
+.format-tile:focus-visible {
+  border-radius: 0.5rem;
+}
+
+/* The row's target-format picker (FormatSelect). Same correction for its
+   trigger button, which is also a 0.5rem rounded control. */
+.format-pick:focus-visible {
+  border-radius: 0.5rem;
+}
+
+/* The picker's popover. It is position: fixed (it has to escape the file
+   list's two overflow containers), so it needs its own shadow - a black
+   shadow is invisible on the dark theme's background. */
+.format-pop {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.dark .format-pop {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 /* ------------------------------------------------------------------ */

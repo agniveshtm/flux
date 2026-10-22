@@ -81,6 +81,14 @@ window.Flux.useFlux = function() {
 const mockSupportedFormats = {
   input: ['jpg', 'jpeg', 'png', 'webp', 'ico', 'gif', 'avif', 'heic', 'heif'],
   output: ['jpg', 'png', 'webp', 'ico', 'gif', 'avif', 'heic'],
+  // Which converter writes each output format. The real matrix comes from
+  // the bridge, which reports this from the converter registry; the copy
+  // here has to agree with it or the UI would group formats wrongly.
+  // Pinned to the backend by tests/test_formats.py.
+  kinds: {
+    jpg: 'image', png: 'image', webp: 'image', ico: 'image',
+    gif: 'image', avif: 'image', heic: 'image',
+  },
 };
 
   const mockJobs = new Map();
