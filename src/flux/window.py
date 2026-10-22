@@ -292,10 +292,14 @@ class FluxAPI:
 
         return {"cancelled": True}
 
-    def getSupportedFormats(self) -> dict[str, list[str]]:
+    def getSupportedFormats(self) -> dict[str, Any]:
         return {
             "input": self.registry.supported_input_formats,
             "output": self.registry.supported_output_formats,
+            # Which converter writes each output format, so the UI can group
+            # the formats it offers (image, video) without keeping its own
+            # list of which is which.
+            "kinds": self.registry.supported_output_kinds,
         }
 
     def pickFiles(self, multiple: bool | dict[str, Any] = True) -> dict[str, Any]:

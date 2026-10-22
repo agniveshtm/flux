@@ -33,6 +33,18 @@ def normalize_format(value: str) -> str:
 class BaseConverter(ABC):
     @property
     @abstractmethod
+    def kind(self) -> str:
+        """What this converter writes: "image", "video", and so on.
+
+        The UI groups the formats it offers by this - the format picker
+        shows image and video formats as separate sets - so it has to come
+        from the converter that actually writes the format rather than from
+        a list in the frontend.
+        """
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
     def supported_input_formats(self) -> list[str]:
         raise NotImplementedError
 
@@ -101,3 +113,16 @@ class ConverterRegistry:
     @property
     def supported_output_formats(self) -> list[str]:
         return sorted(self._converters)
+
+    @property
+    def supported_output_kinds(self) -> dict[str, str]:
+        """Which converter writes each output format, as format -> kind.
+
+        Keyed by the same normalized names as supported_output_formats, so
+        the UI can group the formats it offers without knowing which
+        converter is behind them.
+        """
+        return {
+            fmt: converter.kind
+            for fmt, converter in self._converters.items()
+        }

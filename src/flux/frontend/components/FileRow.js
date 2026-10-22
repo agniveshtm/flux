@@ -221,7 +221,6 @@ window.Flux.FileRow = {
       </td>
       <td class="px-4 py-4 w-40">
         <FormatSelect
-          :input-format="inputFormat"
           :target-format="file.targetFormat"
           :options="validTargets"
           :disabled="file.status === 'converting' || file.status === 'done'"
