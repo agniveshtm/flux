@@ -245,7 +245,14 @@ flux/
 │           │   └── styles/
 │           └── dist/               # built output (committed)
 ├── scripts/
-│   └── check-frontend.js         # node syntax/template/wiring + default-target behaviour
+│   ├── check-frontend.js         # node syntax/template/wiring + default-target behaviour
+│   └── ui/                       # headless-browser UI checks (no npm dependencies)
+│       ├── lib.js                # browser discovery + CDP driver + instrumented copy
+│       ├── check-layout.js       # equal wings, centred button/ring, no sideways scroll
+│       ├── check-donut.js        # slice pick, kind toggle, keyboard activation
+│       ├── check-picker.js       # row picker's popover: open, pick, Escape, focus
+│       ├── check-app.js          # the shipped frontend mounts clean, over file://
+│       └── measure.js            # prints the rendered geometry
 ├── tests/                        # pytest suite (version + updater)
 ├── flux.spec                     # PyInstaller spec (dist/flux.exe)
 ├── pyproject.toml

@@ -35,7 +35,14 @@ flux/
 ├── installer/
 │   └── flux.iss                  # Inno Setup script (packages dist/flux.exe into the setup)
 ├── scripts/
-│   └── check-frontend.js         # node syntax/template/index checks (no npm dependencies)
+│   ├── check-frontend.js         # node syntax/template/index checks (no npm dependencies)
+│   └── ui/                       # headless-browser UI checks (no npm dependencies)
+│       ├── lib.js                # browser discovery + CDP driver + instrumented copy
+│       ├── check-layout.js       # equal wings, centred button/ring, no sideways scroll
+│       ├── check-donut.js        # slice pick, kind toggle, keyboard activation
+│       ├── check-picker.js       # row picker's popover: open, pick, Escape, focus
+│       ├── check-app.js          # the shipped frontend mounts clean, over file://
+│       └── measure.js            # prints the rendered geometry
 ├── docs/
 │   ├── PRD.md                    # Product requirements & scope
 │   ├── ARCHITECTURE.md           # Layers, bridge API surface, threading model
@@ -161,6 +168,26 @@ flux --version     # flux 0.1.0
 uv run pytest tests/              # backend: version sync + updater primitives
 node scripts/check-frontend.js    # frontend: syntax, Vue templates, page wiring
 ```
+
+### UI checks
+
+`scripts/check-frontend.js` is static: it reads the files. The checks under
+`scripts/ui/` drive a real headless browser against the real frontend and
+read the rendered result back, which is the only way to check the rules that
+only exist after layout — two equal wings, a centred button, a popover that
+is not clipped by the file list's overflow.
+
+```bash
+node scripts/ui/check-app.js      # the shipped frontend mounts clean
+node scripts/ui/check-layout.js   # the layout invariants hold
+node scripts/ui/check-donut.js    # the format ring behaves
+node scripts/ui/check-picker.js   # the row picker's popover behaves
+node scripts/ui/measure.js        # print the rendered geometry
+```
+
+They need Chrome or Edge (Edge is used when present, and `FLUX_BROWSER`
+overrides the choice) and no npm packages. They are local checks rather than
+CI jobs because they need a browser, which the CI runner does not install.
 
 `uv run pytest tests/`:
 
