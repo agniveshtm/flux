@@ -1303,9 +1303,9 @@ video {
   text-align: right;
 }
 
-.text-2xl {
-  font-size: 1.5rem;
-  line-height: 2rem;
+.text-4xl {
+  font-size: 2.25rem;
+  line-height: 2.5rem;
 }
 
 .text-base {
@@ -1614,6 +1614,22 @@ body {
 
 .format-pick:focus-visible {
   border-radius: 0.5rem;
+}
+
+/* The format ring's slices are SVG paths, so the global focus rule's
+   box-shadow cannot follow their shape - and a click gives the path focus
+   without matching :focus-visible, leaving the browser's rectangular `auto`
+   outline drawn around the path's bounding box. Stroke the path instead: it
+   traces the slice's own outer and inner arcs and its two radial edges. */
+
+.format-donut path:focus {
+  outline: none;
+  stroke: var(--color-accent);
+  stroke-width: 2;
+}
+
+.format-donut path:focus-visible {
+  box-shadow: none;
 }
 
 /* The picker's popover. It is position: fixed (it has to escape the file
