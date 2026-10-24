@@ -186,7 +186,9 @@ node scripts/ui/measure.js        # print the rendered geometry
 ```
 
 They need Chrome or Edge (Edge is used when present, and `FLUX_BROWSER`
-overrides the choice) and no npm packages. They are local checks rather than
+overrides the choice) and no npm packages. Node 22+ is required for its
+global WebSocket, which the UI driver uses directly without an external
+library. They are local checks rather than
 CI jobs because they need a browser, which the CI runner does not install.
 
 `uv run pytest tests/`:

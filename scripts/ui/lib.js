@@ -76,11 +76,14 @@ function which(name) {
 // '../assets/logo-dark.png', so the copy keeps the frontend and the assets
 // as siblings under a common parent, exactly as src/flux/ does.
 let instrumentedUrl = null;
+const instanceId = Date.now() + '-' + process.pid;
 
 function instrumentFrontend() {
   if (instrumentedUrl) return instrumentedUrl;
 
-  const tmp = path.join(os.tmpdir(), 'flux-ui-check');
+  // Each Node invocation gets its own temp dir to avoid races when running
+  // multiple checks in parallel.
+  const tmp = path.join(os.tmpdir(), `flux-ui-check-${instanceId}`);
   const bundle = path.join(tmp, 'flux');
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(bundle, { recursive: true });
@@ -168,6 +171,13 @@ async function openPage(options = {}) {
   const page = (targets || []).find((target) => target.type === 'page');
   if (!page) {
     killBrowser(child);
+    // Profile dir: the browser holds it open briefly after kill, so try with
+    // retries then leave it for the OS if still locked.
+    try {
+      fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (error) {
+      /* the profile may be locked; the OS will reclaim it */
+    }
     throw new Error('The browser exposed no page target');
   }
 

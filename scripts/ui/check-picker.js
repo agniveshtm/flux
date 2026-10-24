@@ -42,6 +42,11 @@ const { check, finish, instrumentFrontend, openPage } = require('./lib');
       'no popover appeared');
 
     // 2. The arrow key moves the roving focus.
+    const before = await page.evaluate(
+      "document.activeElement ? document.activeElement.textContent.trim() : null"
+    );
+    check('an option is focused when the popover opens', !!before, 'nothing held the focus');
+
     await page.evaluate(`
       (function(){
         var option = document.querySelector('.format-pop .format-tile');
@@ -52,10 +57,10 @@ const { check, finish, instrumentFrontend, openPage } = require('./lib');
       })()
     `);
     await settle(150);
-    const moved = await page.evaluate(
+    const after = await page.evaluate(
       "document.activeElement ? document.activeElement.textContent.trim() : null"
     );
-    check('ArrowDown moves the focus', !!moved, 'nothing holds the focus');
+    check('ArrowDown moves the focus', after && after !== before, 'focus did not move');
 
     // 3. Picking closes it and updates the row.
     await page.evaluate(`
