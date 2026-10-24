@@ -36,14 +36,14 @@ window.Flux.Branding = {
         v-if="!logoError"
         :src="logoSrc"
         alt=""
-        class="h-10 w-auto transition-opacity duration-300"
+        class="h-14 w-auto transition-opacity duration-300"
         :class="{ 'opacity-0': !logoLoaded, 'opacity-100': logoLoaded }"
         @load="logoLoaded = true"
         @error="logoError = true"
         aria-hidden="true"
       />
       <span
-        class="text-2xl font-semibold leading-none tracking-tight select-none transition-colors duration-200"
+        class="text-4xl font-semibold leading-none tracking-tight select-none transition-colors duration-200"
         :class="theme === 'dark' ? 'text-white' : 'text-black'"
       >
         flux
