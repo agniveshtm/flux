@@ -32,7 +32,9 @@ Object.entries(components).forEach(([name, component]) => {
 // Targets whose encoder takes a quality setting. Kept next to the option
 // wiring below because it is the one place that decides whether the slider is
 // worth showing; a target not listed here ignores a quality option.
-const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif', 'heic']);
+// MP4 is quality-driven too - its encoder maps the slider onto CRF (see
+// x264_crf/vp9_crf in flux/services/video_converter.py).
+const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif', 'heic', 'mp4']);
 
 // The order a dropped file's target is preselected from, most compatible first.
 //
@@ -43,7 +45,14 @@ const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif', 'heic']);
 // for a general consumer, offered before they chose anything. This list makes
 // the choice explicit, and 'avif' sits last so it stays something the user
 // picks rather than something they are given.
-const TARGET_PREFERENCE = ['jpg', 'png', 'webp', 'ico', 'gif', 'heic', 'avif'];
+//
+// 'mp4' leads because the matrix is input-aware (see rowTargets inside setup):
+// a video row's targets are MP4 plus the still formats a frame can be pulled
+// to, and MP4 is the whole point of dropping a video - while image rows never
+// list MP4, so putting it first costs those rows nothing and they still land
+// on 'jpg'. Ties are resolved by this order alone, never by the backend's
+// alphabetical one.
+const TARGET_PREFERENCE = ['mp4', 'jpg', 'png', 'webp', 'ico', 'gif', 'heic', 'avif'];
 
 // Which target to preselect for an input extension: the first preference the
 // matrix actually offers, never the input format itself. Falls back to the
@@ -72,6 +81,18 @@ const normalizeExt = (ext) => {
   return key;
 };
 
+// Raw-keyed matrix (backend payload or the mock fallback) -> normalized-keyed,
+// the shape rows look themselves up with. The pre-load seed and the load site
+// below both run their matrix through this, so the two cannot normalize
+// differently.
+const normalizeMatrix = (source) => {
+  const mapping = {};
+  Object.entries(source || {}).forEach(([input, targets]) => {
+    mapping[normalizeExt(input)] = (targets || []).map(normalizeExt);
+  });
+  return mapping;
+};
+
 // FileRow resolves a row's targets by the raw extension on its filename, and
 // the backend reports "jpg" for a file named photo.jpeg. Exposed so both sides
 // normalize identically - without it a .jpeg row matches no matrix entry and
@@ -84,12 +105,15 @@ window.Flux.normalizeExt = normalizeExt;
 // and FormatSelect.js, which meant every new format had to be added to a
 // frontend allowlist that could silently disagree with the backend encoders -
 // a format could be offered in the dropdown and then rejected by the converter,
-// or vice versa. It is now derived (see targetsForInput inside setup): every
-// declared output format is a valid target for every input format except the
-// input format itself, since re-encoding an image to the format it is already
-// in is a no-op nobody wants. getSupportedFormats() reads INPUT_FORMATS and
-// OUTPUT_FORMATS from image_converter.py, so the backend stays the single
-// source of truth.
+// or vice versa. It now comes from the backend: getSupportedFormats().targets
+// pairs each input with the outputs whose converter also reads it (the
+// registry derives this - see FluxAPI.getSupportedFormats), and setup() loads
+// it into supportedFormats. The fallback derivation (targetsForInput below)
+// still exists for a payload that arrives without a matrix - a stub, or an
+// older mock - and computes the pre-backend rule: every output except the
+// input itself, since re-encoding a file to the format it is already in is a
+// no-op nobody wants. Either way the backend stays the single source of truth
+// - this file never lists which formats exist.
 
 // Main App Component
 const App = {
@@ -100,16 +124,28 @@ const App = {
     const { convert, getProgress, getSupportedFormats, fallbackFormats, pickFiles, pickOutputDir, openOutputDir, onDroppedPaths, getFilePreview, isNative, normalizeDirPath, checkForUpdate, downloadUpdate, installUpdate, onUpdateProgress } = window.Flux.useFlux();
 
     const files = ref([]);
-    const supportedFormats = ref({});
-    // Which converter writes each output format ('image', 'video'), as
-    // reported by the backend. The format picker groups the formats it
-    // offers by this, so it has to come from the backend rather than from
-    // a list of extensions kept here.
-    const formatKinds = ref({});
+    // All four refs are seeded from the composable's mock instead of empty.
+    // Rows and the donut can render before getSupportedFormats() resolves,
+    // and an empty matrix gives a new row an empty target list -
+    // defaultTargetFor then hands it 'png' (a video row pairing png with
+    // png too) until the load lands. The mock is pinned to the payload's
+    // shape by tests/test_formats.py, so the pre-load frame and the loaded
+    // one agree; the load site below replaces all four.
+    //
+    // Which converter writes each output format ('image', 'video'): the
+    // format picker groups the formats it offers by this, so it comes from
+    // the backend rather than from a list of extensions kept here.
+    const formatKinds = ref(fallbackFormats.kinds || {});
+    // Ring membership of the format donut ({ image: [...], video: [...] }).
+    // GIF belongs to both rings - image conversion from stills, video
+    // conversion from clips - and that mapping arrives here rather than
+    // being decided in FormatDonut.
+    const formatRings = ref(fallbackFormats.rings || null);
     // Every format the backend can write, and the seed for the input->target
     // matrix below. Kept separate from supportedFormats (which is that matrix,
     // keyed by input) because the two answer different questions.
-    const supportedOutputs = ref([]);
+    const supportedOutputs = ref((fallbackFormats.output || []).map(normalizeExt));
+    const supportedFormats = ref(normalizeMatrix(fallbackFormats.targets));
 
     // The conversion matrix, derived from what the backend declares rather than
     // hardcoded here - see the comment above the removed TARGETS_BY_INPUT.
@@ -117,6 +153,17 @@ const App = {
     const targetsForInput = (inputExt) => {
       const key = normalizeExt(inputExt);
       return supportedOutputs.value.filter(out => out !== key);
+    };
+    // A specific row's targets: the backend's input-aware matrix once
+    // getSupportedFormats() has landed, the seeded (mock) copy of that matrix
+    // before it. Every decision made *for one row* - its default target,
+    // whether a bulk pick applies - asks this rather than the global list,
+    // because MP4 is a target for videos only while the format tiles are a
+    // global choice.
+    const rowTargets = (inputExt) => {
+      const key = normalizeExt(inputExt);
+      const mapped = supportedFormats.value[key];
+      return Array.isArray(mapped) ? mapped : targetsForInput(key);
     };
     const outputDir = ref('');
     const isDragOver = ref(false);
@@ -357,11 +404,43 @@ const App = {
         const inputs = (formats.input || []).map(normalizeExt);
         supportedOutputs.value = (formats.output || []).map(normalizeExt);
         formatKinds.value = formats.kinds || {};
+        formatRings.value = formats.rings || null;
         const mapping = {};
-        inputs.forEach(input => {
-          mapping[input] = targetsForInput(input);
-        });
+        if (formats.targets) {
+          // The registry computes this per input, pairing each output with
+          // the converter that both writes it and reads the input - so a
+          // still never offers MP4 (a photo encoded as video is a one-frame
+          // clip) and a video never offers a target that cannot open it.
+          // Keys arrive raw (jpg and jpeg separately) and are normalized
+          // here, matching how rows look themselves up.
+          Object.assign(mapping, normalizeMatrix(formats.targets));
+          inputs.forEach((input) => {
+            if (!mapping[input]) mapping[input] = targetsForInput(input);
+          });
+        } else {
+          // No matrix in the payload (a stub, or a browser-dev mock old
+          // enough to ship none): derive the only way available here - every
+          // output except the input itself - which is what
+          // getSupportedFormats().targets replaces in the real app.
+          inputs.forEach(input => {
+            mapping[input] = targetsForInput(input);
+          });
+        }
         supportedFormats.value = mapping;
+
+        // A row admitted before the real matrix landed can now hold a target
+        // it does not offer: the seeded mock and this build's capabilities
+        // disagree whenever the payload shrinks (a target this Pillow cannot
+        // write, or MP4 on a machine with no ffmpeg), and such a row would
+        // sit there until Convert rejected it. Re-derive exactly those rows;
+        // a target the matrix does offer is kept as-is, including a choice
+        // the user made explicitly.
+        files.value.forEach(file => {
+          const ext = file.name.split('.').pop() || '';
+          if (!rowTargets(ext).includes(file.targetFormat)) {
+            file.targetFormat = getDefaultTargetFormat(ext);
+          }
+        });
 
         // Rows admitted by the pre-load fallback can turn out to be
         // unsupported once the real capabilities land: the fallback lists AVIF
@@ -480,12 +559,15 @@ const App = {
 
     function getDefaultTargetFormat(inputExt) {
       // A bulk pick from the format tiles wins over the per-extension
-      // preference, except when the file is already in that format.
+      // preference, except when the file is already in that format - or when
+      // this row cannot be converted to it at all (the tiles are global, the
+      // matrix is not: an image row has no MP4 target).
       const key = normalizeExt(inputExt);
-      if (bulkTarget.value && bulkTarget.value !== key) {
+      const targets = rowTargets(key);
+      if (bulkTarget.value && bulkTarget.value !== key && targets.includes(bulkTarget.value)) {
         return bulkTarget.value;
       }
-      return defaultTargetFor(inputExt, targetsForInput(inputExt));
+      return defaultTargetFor(inputExt, targets);
     }
 
     function removeFile(index) {
@@ -508,7 +590,9 @@ const App = {
     // A row whose input is already that format is left alone - converting a
     // PNG to PNG is the no-op the matrix deliberately never offers
     // (see targetsForInput), so honouring the pick there would put a target
-    // the dropdown does not even list on the row.
+    // the dropdown does not even list on the row. The same guard covers the
+    // other half of the input-aware matrix: MP4 is a target video rows offer,
+    // never an image one, so a global MP4 pick must not stamp it onto stills.
     function handleSelectTarget(format) {
       const key = normalizeExt(format);
       bulkTarget.value = key;
@@ -516,6 +600,7 @@ const App = {
         if (file.status === 'done') return;
         const input = normalizeExt(file.name.split('.').pop() || '');
         if (input === key) return;
+        if (!rowTargets(input).includes(key)) return;
         file.targetFormat = key;
       });
     }
@@ -859,6 +944,7 @@ const App = {
       // matrix.
       supportedOutputs,
       formatKinds,
+      formatRings,
       outputDir,
       isDragOver,
       isConverting,
@@ -943,6 +1029,7 @@ const App = {
           <FormatDonut
             :formats="supportedOutputs"
             :kinds="formatKinds"
+            :rings="formatRings"
             :active="activeTarget"
             :disabled="isConverting"
             @select="handleSelectTarget"

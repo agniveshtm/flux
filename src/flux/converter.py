@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Event
 from typing import Callable
 
@@ -30,6 +32,45 @@ def normalize_format(value: str) -> str:
     return normalized
 
 
+def reserve_unique_output(
+    output_directory: Path, stem: str, target_format: str, used_names: set[str]
+) -> Path:
+    """Claim a free output name for one file, returning its (reserved) path.
+
+    The name is reserved by *creating* it with O_CREAT|O_EXCL rather than
+    probed with exists(): the window between a successful exists() check and
+    ffmpeg/Pillow writing the file lets two concurrent conversions of the
+    same input both pick "clip.mp4", and the later -y/overwrite would
+    silently replace the other job's finished result. O_EXCL makes exactly
+    one claim win; the loser sees FileExistsError and takes the next suffix.
+
+    The 0-byte reservation is the output's placeholder - the encoder
+    overwrites it in place - so a file whose conversion then fails must
+    unlink it; each convert() does that in its except handler, and the
+    cancel paths unlink the partial themselves. Other OS errors (a
+    permission problem, a full disk) propagate as the conversion error they
+    are rather than looping forever.
+    """
+    counter = 0
+    while True:
+        name = (
+            f"{stem}.{target_format}"
+            if counter == 0
+            else f"{stem}-{counter}.{target_format}"
+        )
+        counter += 1
+        if name in used_names:
+            continue
+        path = output_directory / name
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            continue
+        os.close(fd)
+        used_names.add(name)
+        return path
+
+
 class BaseConverter(ABC):
     @property
     @abstractmethod
@@ -53,6 +94,20 @@ class BaseConverter(ABC):
     def supported_output_formats(self) -> list[str]:
         raise NotImplementedError
 
+    @property
+    def also_video_outputs(self) -> tuple[str, ...]:
+        """Outputs of this converter that are also *video* conversions.
+
+        Most formats belong to one ring of the format donut: the ring of the
+        converter that writes them. GIF is the exception - written from
+        stills by the image converter and from full clips by the same
+        converter's palette chain - so the converter that owns it declares
+        the extra ring membership here rather than the frontend keeping a
+        "gif is also video" special case. Empty for everything else, and
+        capability-gated by the implementations (no ffmpeg, no video ring).
+        """
+        return ()
+
     @abstractmethod
     def convert(
         self,
@@ -60,7 +115,10 @@ class BaseConverter(ABC):
         output_dir: str,
         target_format: str,
         options: dict,
-        progress_cb: Callable[[int, int], None],
+        # float, not int: image converters report (index, total) at file
+        # boundaries, but the video converter also reports fractions within
+        # a file (completed_before + elapsed/duration) for a smooth bar.
+        progress_cb: Callable[[float, float], None],
         cancel_event: Event,
     ) -> ConversionResult:
         raise NotImplementedError
@@ -126,3 +184,58 @@ class ConverterRegistry:
             fmt: converter.kind
             for fmt, converter in self._converters.items()
         }
+
+    @property
+    def supported_targets_by_input(self) -> dict[str, list[str]]:
+        """Which target each readable input format may be converted to.
+
+        The input-aware half of the format matrix, derived here rather than
+        in the frontend (which must never keep a format table of its own):
+
+        * a format is never a target of itself - re-encoding to the format
+          you already have is the no-op the matrix has always excluded; and
+        * a target appears only if the converter that *writes* it also
+          *reads* this input. That second rule is what keeps offered targets
+          honest as converters multiply: images never offer MP4 (the video
+          converter does not decode stills - a photo encoded as a video is a
+          one-frame clip nobody wants), and a video never offers a target
+          whose encoder cannot open it.
+
+        Keys are the raw input names (jpg and jpeg both appear, matching
+        supported_input_formats); values are sorted for a stable UI order.
+        """
+        mapping: dict[str, list[str]] = {}
+        for input_format in self.supported_input_formats:
+            key = normalize_format(input_format)
+            targets = {
+                fmt
+                for fmt, converter in self._converters.items()
+                if fmt != key and input_format in converter.supported_input_formats
+            }
+            mapping[input_format] = sorted(targets)
+        return mapping
+
+    @property
+    def supported_output_rings(self) -> dict[str, list[str]]:
+        """Which ring of the format donut each output belongs to.
+
+        The donut groups formats by kind, and GIF - written from stills
+        (image conversion) *and* from clips (video conversion) - has to
+        appear in both rings: an image row's GIF target is an image
+        conversion, a video row's is a video one, and the ring is a browse
+        surface, not a routing decision. Membership comes from each
+        converter's kind plus its declared also_video_outputs, so the
+        frontend receives the grouping and never computes it.
+        """
+        rings: dict[str, list[str]] = {"image": [], "video": []}
+        seen_converters: set[int] = set()
+        for fmt, converter in self._converters.items():
+            rings.setdefault(converter.kind, []).append(fmt)
+            if id(converter) in seen_converters:
+                continue
+            seen_converters.add(id(converter))
+            for extra in converter.also_video_outputs:
+                normalized = normalize_format(extra)
+                if normalized in self._converters and normalized not in rings["video"]:
+                    rings["video"].append(normalized)
+        return {kind: sorted(formats) for kind, formats in rings.items()}

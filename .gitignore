@@ -20,3 +20,6 @@ wheels/
 
 # Research
 research
+
+# Vendored sidecar binaries (re-download + verify via vendor/README.md)
+vendor/*.exe

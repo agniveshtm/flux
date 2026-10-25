@@ -22,7 +22,13 @@ from flux.converter import (
     UnsupportedFormatError,
     normalize_format,
 )
-from flux.services import PillowImageConverter, UpdateError, UpdateInfo, Updater
+from flux.services import (
+    FFmpegVideoConverter,
+    PillowImageConverter,
+    UpdateError,
+    UpdateInfo,
+    Updater,
+)
 
 
 @dataclass
@@ -93,6 +99,9 @@ class FluxAPI:
     def _default_registry() -> ConverterRegistry:
         registry = ConverterRegistry()
         registry.register(PillowImageConverter())
+        # A no-op without a capable ffmpeg build: the converter declares no
+        # formats, so registration maps nothing and the UI stays image-only.
+        registry.register(FFmpegVideoConverter())
         return registry
 
     def attach_window(self, window: Any) -> None:
@@ -300,6 +309,17 @@ class FluxAPI:
             # the formats it offers (image, video) without keeping its own
             # list of which is which.
             "kinds": self.registry.supported_output_kinds,
+            # The input->target matrix itself, derived by the registry from
+            # which converter reads which input. The frontend renders it as
+            # given (and only falls back to deriving its own copy when this
+            # key is absent, e.g. from the browser-dev mock), so a target
+            # whose converter cannot read the input is never offered.
+            "targets": self.registry.supported_targets_by_input,
+            # The donut's ring membership - e.g. GIF sits in both rings
+            # because it is written from stills and from clips alike. Like
+            # kinds, this comes from the converters so the frontend never
+            # keeps its own list of which format belongs where.
+            "rings": self.registry.supported_output_rings,
         }
 
     def pickFiles(self, multiple: bool | dict[str, Any] = True) -> dict[str, Any]:
@@ -314,10 +334,14 @@ class FluxAPI:
             dialog_type=webview.FileDialog.OPEN,
             allow_multiple=bool(multiple),
             file_types=(
-                # Kept in step with image_converter.INPUT_FORMATS by
+                # Kept in step with the converters' input formats by
                 # tests/test_formats.py: a format missing here cannot be picked
-                # through the native dialog at all.
+                # through the native dialog at all. The video entry is static
+                # like the image one, so a build without ffmpeg still lists
+                # them - harmless, because such a build's registry never
+                # admits the row (same reasoning as .avif in the preview map).
                 "Image files (*.jpg;*.jpeg;*.png;*.webp;*.ico;*.gif;*.avif;*.heic;*.heif)",
+                "Video files (*.mp4;*.mov;*.mkv;*.avi;*.webm;*.m4v;*.wmv;*.flv;*.mpg;*.mpeg;*.mts;*.m2ts;*.ts;*.3gp;*.ogv)",
             ),
         )
         # Single-select yields a bare string while multi-select yields a tuple:
@@ -403,17 +427,19 @@ class FluxAPI:
     # _PREVIEW_THUMB_MAX_EDGE; values <= 0 mean "as stored"). The image is
     # decoded and re-encoded at that size, so what crosses the bridge is a few
     # KB rather than the whole file.
-    # Which local files the preview bridge will decode. This is a security
-    # allowlist, not the converter's format list: the page must not be able to
-    # read arbitrary local files, and it is deliberately broader than what Flux
-    # converts (BMP/TIFF preview fine but are not conversion inputs).
-    # The only suffixes the preview bridge will read. Kept exactly in step with
-    # image_converter.INPUT_FORMATS (tests/test_formats.py pins both directions)
-    # because this list is a security boundary - it is what stops the page
-    # reading arbitrary local files - and because a format admitted here but not
+    # The only suffixes the preview bridge will read. Kept in step with the
+    # image inputs (tests/test_formats.py pins both directions) because this
+    # list is a security boundary - it is what stops the page reading
+    # arbitrary local files - and because a format admitted here but not
     # there produces a preview for a file Flux then refuses to convert. .avif
-    # stays even on a build without libavif: the map is static, and the path is
-    # unreachable for a format the UI never admits as a row.
+    # stays even on a build without libavif: the map is static, and the path
+    # is unreachable for a format the UI never admits as a row.
+    #
+    # Video suffixes are deliberately absent although the converters read
+    # them: this bridge decodes *images* (getFilePreview below returns "Only
+    # image files can be previewed." otherwise), so a video row falls back to
+    # the placeholder glyph in FileRow rather than pretending to a thumbnail
+    # it cannot produce.
     _PREVIEW_MIME_TYPES = {
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
@@ -703,7 +729,9 @@ class FluxAPI:
 
         self._emit_progress(job_id)
 
-        def progress_callback(current: int, total: int) -> None:
+        # float values: the video converter reports fractions within a file,
+        # and the percentage maths below works on either.
+        def progress_callback(current: float, total: float) -> None:
             percentage = round((current / total) * 100) if total else 0
             with self._lock:
                 current_job = self._jobs.get(job_id)

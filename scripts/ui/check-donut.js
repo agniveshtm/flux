@@ -23,6 +23,9 @@ const { check, finish, instrumentFrontend, openPage } = require('./lib');
         slices: document.querySelectorAll('.format-donut path[role="option"]').length,
         ring: document.querySelectorAll('.format-donut circle').length,
         caption: svg.parentElement.parentElement.querySelector('p').textContent.trim(),
+        labels: Array.prototype.map.call(
+          document.querySelectorAll('.format-donut path[role="option"]'),
+          function(p){ return p.getAttribute('aria-label'); }),
         selected: Array.prototype.map.call(
           document.querySelectorAll('.format-donut path[aria-selected="true"]'),
           function(p){ return p.getAttribute('aria-label'); }),
@@ -86,9 +89,14 @@ const { check, finish, instrumentFrontend, openPage } = require('./lib');
     const video = await page.evaluate(state);
     check('the centre toggles to the video ring', video.centre === 'VID',
       `the centre reads "${video.centre}"`);
-    check('the video ring has no slices yet', video.slices === 0,
-      `${video.slices} slices`);
-    check('the video ring still reads as a ring', video.ring === 1,
+    // The video ring carries GIF as well as MP4 - gif -> mp4 is a video
+    // conversion, and a video -> gif still (or full clip) is a video
+    // conversion too - so the ring is a real two-slice ring now, not the
+    // single-circle placeholder it was while MP4 was the only output.
+    check('the video ring shows GIF and MP4',
+      video.labels.length === 2 && video.labels[0] === 'GIF' && video.labels[1] === 'MP4',
+      `the video ring shows ${JSON.stringify(video.labels)}`);
+    check('the video ring draws slices, not a placeholder circle', video.ring === 0,
       `${video.ring} circles`);
     check('the video ring says so', video.caption === 'Video',
       `the caption reads "${video.caption}"`);

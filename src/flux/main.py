@@ -8,7 +8,7 @@ import webview
 
 from flux import __version__
 from flux.converter import ConverterRegistry
-from flux.services import PillowImageConverter
+from flux.services import FFmpegVideoConverter, PillowImageConverter
 from flux.window import FluxAPI
 
 _CLI_USAGE = """\
@@ -115,6 +115,10 @@ def _bundled_path(*parts: str) -> Path:
 def create_window() -> webview.Window | None:
     registry = ConverterRegistry()
     registry.register(PillowImageConverter())
+    # Registers nothing on a build without a capable ffmpeg (see
+    # FFmpegVideoConverter.supported_output_formats), so a source checkout
+    # with no vendor/ffmpeg.exe behaves exactly as it did before video.
+    registry.register(FFmpegVideoConverter())
 
     api = FluxAPI(registry)
 

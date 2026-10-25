@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import subprocess
+import tempfile
 from pathlib import Path
 from threading import Event
 from typing import Callable
 
 from PIL import Image, ImageOps, features
 
-from flux.converter import BaseConverter, ConversionResult, UnsupportedFormatError, normalize_format
+from flux.converter import BaseConverter, ConversionResult, UnsupportedFormatError, normalize_format, reserve_unique_output
+from flux.services.ffmpeg import VIDEO_INPUT_FORMATS, locate_ffmpeg, run_ffmpeg, video_available
 
 def _avif_available() -> bool:
     """Whether this Pillow build can encode AVIF.
@@ -64,6 +67,11 @@ OUTPUT_FORMATS = ("jpg", "png", "webp", "ico", "gif") + (
 # alpha become that index; anything above is flattened opaque.
 _GIF_TRANSPARENCY_THRESHOLD = 128
 
+# Frames per second for a video -> GIF encode when the caller does not say.
+# The report's palette chain uses fps=15: smooth enough to read as motion,
+# slow enough that a clip does not explode into a multi-megabyte file.
+_ANIMATED_GIF_FPS = 15
+
 # The alpha -> transparency mask lookup for that threshold, built once at import.
 #
 # This is deliberately a list rather than a lambda. Pillow's point() is
@@ -85,11 +93,35 @@ class PillowImageConverter(BaseConverter):
 
     @property
     def supported_input_formats(self) -> list[str]:
+        # Video suffixes are readable here too: ffmpeg decodes their first
+        # frame (see _extract_video_frame) and the still then travels the
+        # normal Pillow pipeline below, so every image option - quality,
+        # dither, ICO sizes, transparency - applies to a frame pulled from a
+        # video exactly as it does to a photo. Capability-gated, so a build
+        # without ffmpeg never admits a video it could not open; the module
+        # INPUT_FORMATS tuple stays image-only because it describes what
+        # Pillow itself reads.
+        if video_available():
+            return list(INPUT_FORMATS) + list(VIDEO_INPUT_FORMATS)
         return list(INPUT_FORMATS)
 
     @property
     def supported_output_formats(self) -> list[str]:
         return list(OUTPUT_FORMATS)
+
+    @property
+    def also_video_outputs(self) -> tuple[str, ...]:
+        """Outputs that belong in the format donut's video ring as well.
+
+        GIF is written here for stills (Pillow) *and* for full clips via the
+        palette chain in _encode_animated_gif - the second is a video
+        conversion, so the donut lists GIF under both rings. Gated with the
+        rest of the video surface: without a capable ffmpeg build there is
+        no video -> GIF to advertise, and the video ring stays empty.
+        """
+        if video_available():
+            return ("gif",)
+        return ()
 
     def convert(
         self,
@@ -97,7 +129,7 @@ class PillowImageConverter(BaseConverter):
         output_dir: str,
         target_format: str,
         options: dict,
-        progress_cb: Callable[[int, int], None],
+        progress_cb: Callable[[float, float], None],
         cancel_event: Event,
     ) -> ConversionResult:
         target = normalize_format(target_format)
@@ -120,6 +152,8 @@ class PillowImageConverter(BaseConverter):
                 break
 
             source = Path(input_path).expanduser()
+            cancelled_mid_file = False
+            output_path: Path | None = None
             try:
                 if not source.is_file():
                     raise FileNotFoundError(f"Input file does not exist: {source}")
@@ -130,45 +164,244 @@ class PillowImageConverter(BaseConverter):
                         f"Unsupported input format: {input_format or 'unknown'}"
                     )
 
-                stem = source.stem
-                output_name = f"{stem}.{target}"
-                counter = 1
-                while output_name in used_names or (output_directory / output_name).exists():
-                    output_name = f"{stem}-{counter}.{target}"
-                    counter += 1
-                used_names.add(output_name)
+                # Claim the name atomically (see reserve_unique_output):
+                # exists() alone lets two concurrent jobs pick the same name
+                # and then overwrite each other's finished output.
+                output_path = reserve_unique_output(
+                    output_directory, source.stem, target, used_names
+                )
 
-                output_path = output_directory / output_name
-                with Image.open(source) as image:
-                    image.load()
-                    if target == "gif" and self._is_animated(image):
-                        self._save_animated_gif(image, output_path, conversion_options)
+                if target == "gif" and input_format in VIDEO_INPUT_FORMATS:
+                    # A clip becomes a full animation, not a still frame:
+                    # the palette chain writes every frame, so GIF is a
+                    # genuine video conversion for video inputs (and stays
+                    # Pillow's for every still input, below). Cancel behaves
+                    # like the MP4 path - the partial is removed here.
+                    was_cancelled = self._encode_animated_gif(
+                        source,
+                        output_path,
+                        conversion_options,
+                        progress_cb=lambda current, _: progress_cb(
+                            index - 1 + current, total
+                        ),
+                        cancel_event=cancel_event,
+                    )
+                    if was_cancelled:
+                        cancelled_mid_file = True
+                        result.errors.append("Conversion cancelled")
                     else:
-                        # Non-GIF targets keep only the first frame. Image.load()
-                        # has already collapsed the sequence, so an animated
-                        # source becomes its poster frame - the behaviour every
-                        # still-image target wants, and the one Pillow's
-                        # save_all would otherwise have to be asked for.
-                        self._save(
-                            ImageOps.exif_transpose(image),
-                            output_path,
-                            target,
-                            conversion_options,
-                        )
+                        result.output_paths.append(str(output_path))
+                        result.outputs.append((input_path, str(output_path)))
+                else:
+                    # Video inputs are decoded to a one-frame PNG first, so
+                    # from here on this is an ordinary still conversion. The
+                    # temp file is removed either way, including when the
+                    # encode fails.
+                    temp_frame: Path | None = None
+                    decode_path = source
+                    if input_format in VIDEO_INPUT_FORMATS:
+                        temp_frame = self._extract_video_frame(source)
+                        decode_path = temp_frame
 
-                result.output_paths.append(str(output_path))
-                # Reported against the path the caller supplied, not the
-                # expanded one: the frontend matches outputs to rows by
-                # string equality on the path it sent, so echoing back an
-                # expanded "~/..." would match nothing and mark a successful
-                # file as failed.
-                result.outputs.append((input_path, str(output_path)))
+                    try:
+                        with Image.open(decode_path) as image:
+                            image.load()
+                            if target == "gif" and self._is_animated(image):
+                                self._save_animated_gif(image, output_path, conversion_options)
+                            else:
+                                # Non-GIF targets keep only the first frame.
+                                # Image.load() has already collapsed the
+                                # sequence, so an animated source becomes its
+                                # poster frame - the behaviour every still
+                                # target wants, and the one Pillow's save_all
+                                # would otherwise have to be asked for.
+                                self._save(
+                                    ImageOps.exif_transpose(image),
+                                    output_path,
+                                    target,
+                                    conversion_options,
+                                )
+                    finally:
+                        if temp_frame is not None:
+                            try:
+                                temp_frame.unlink(missing_ok=True)
+                            except OSError:
+                                pass
+
+                    result.output_paths.append(str(output_path))
+                    # Reported against the path the caller supplied, not the
+                    # expanded one: the frontend matches outputs to rows by
+                    # string equality on the path it sent, so echoing back an
+                    # expanded "~/..." would match nothing and mark a successful
+                    # file as failed.
+                    result.outputs.append((input_path, str(output_path)))
             except Exception as exc:
+                # The reservation is a 0-byte placeholder until _save writes
+                # over it; a failure between claim and encode would leave
+                # that empty file looking like an output, so it goes away
+                # with the failure (the gif path unlinks its own partial).
+                if output_path is not None:
+                    try:
+                        output_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 result.errors.append(f"{source.name}: {exc}")
             finally:
                 progress_cb(index, total)
 
+            if cancelled_mid_file:
+                break
+
         return result
+
+    @staticmethod
+    def _extract_video_frame(source: Path) -> Path:
+        """Decode a video's first frame to a temporary PNG. Caller deletes it.
+
+        ffmpeg is the decoder and Pillow stays the encoder: handing _save a
+        decoded frame keeps every option, palette and transparency rule in
+        one place instead of writing a second image pipeline for video
+        sources. -frames:v 1 stops as soon as one frame is out, so a huge
+        input costs the same as a short one.
+
+        The temp file is created up front so the name exists on every
+        platform, then ffmpeg -y overwrites it; on any failure it is removed
+        here so a failed conversion never leaves an empty file behind.
+        """
+        ffmpeg = locate_ffmpeg()
+        if ffmpeg is None:
+            raise UnsupportedFormatError(
+                "Reading a frame from a video requires ffmpeg, which is not available."
+            )
+
+        handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        handle.close()
+        frame_path = Path(handle.name)
+
+        try:
+            result = subprocess.run(
+                [
+                    str(ffmpeg),
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-y",
+                    "-i", str(source),
+                    "-frames:v", "1",
+                    str(frame_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            frame_path.unlink(missing_ok=True)
+            raise RuntimeError(f"ffmpeg could not read the video: {exc}") from exc
+
+        if result.returncode != 0 or not frame_path.is_file() or frame_path.stat().st_size == 0:
+            detail = [line.strip() for line in (result.stderr or "").splitlines() if line.strip()]
+            frame_path.unlink(missing_ok=True)
+            # The last log line is the diagnosis (ffmpeg reports the fatal
+            # problem after the setup chatter); the exit code is the fallback.
+            raise RuntimeError(detail[-1] if detail else f"ffmpeg exited with code {result.returncode}")
+
+        return frame_path
+
+    @staticmethod
+    def _encode_animated_gif(
+        source: Path,
+        output_path: Path,
+        options: dict,
+        progress_cb: Callable[[float, float], None],
+        cancel_event: Event,
+    ) -> bool:
+        """Encode a video's frames into an animated GIF. True if cancelled.
+
+        The palette chain from the report (research table, GIF row): fps and
+        a lanczos scale, then split into palettegen (stats_mode=diff) and
+        paletteuse, whose dither honours the UI's dither option just like
+        Pillow's still-GIF path does (sierra2_4a on, none off). A plain
+        transcode quantises each frame independently and the result flickers
+        between frames; the two-pass palette is the difference between "a
+        gif" and "the gif". -loop 0 keeps the output looping forever, which
+        is what every gif consumer expects and what Pillow writes for
+        animated sources too.
+
+        Runs through run_ffmpeg like every other encode, so Cancel behaves
+        identically here - "q" finalises, 255 still reads as cancelled, and
+        the bar moves from out_time ticks against the Duration on stderr.
+        The caller's contract for this path: a cancelled encode has already
+        removed its partial output by the time this returns.
+        """
+        ffmpeg = locate_ffmpeg()
+        if ffmpeg is None:
+            raise UnsupportedFormatError(
+                "Writing a GIF from a video requires ffmpeg, which is not available."
+            )
+
+        fps = _ANIMATED_GIF_FPS
+        try:
+            if options.get("fps") is not None:
+                fps = max(1, min(60, int(options["fps"])))
+        except (TypeError, ValueError):
+            fps = _ANIMATED_GIF_FPS
+
+        # The report writes this as scale=…:-1 - a chosen width, not a
+        # literal - and 480 is the conventional GIF ceiling: wide enough to
+        # read, narrow enough that a 1080p clip cannot produce a file nobody
+        # can send. min() never upscales; the comma is escaped because the
+        # filter argument parser would otherwise split it into a second
+        # filter. The palette half is the report's two-pass chain: a plain
+        # transcode quantises each frame independently and flickers.
+        # The dither checkbox means the same thing here as on Pillow's
+        # palette path - _dither_option holds the one on/off rule (bool or
+        # name) both encoders read - with ffmpeg spelling it sierra2_4a
+        # (the report's default) or none.
+        dither = (
+            "sierra2_4a"
+            if PillowImageConverter._dither_option(options) is not Image.Dither.NONE
+            else "none"
+        )
+        filter_chain = (
+            f"fps={fps},scale=w=min(iw\\,480):h=-1:flags=lanczos,"
+            "split[a][b];[a]palettegen=stats_mode=diff[p];"
+            f"[b][p]paletteuse=dither={dither}"
+        )
+        cmd = [
+            str(ffmpeg),
+            "-hide_banner",
+            "-nostats",
+            "-loglevel", "info",
+            "-stats_period", "0.25",
+            "-progress", "pipe:1",
+            "-y",
+            "-i", str(source),
+            "-vf", filter_chain,
+            "-loop", "0",
+            str(output_path),
+        ]
+
+        ok, error_message = run_ffmpeg(
+            cmd,
+            progress_cb=progress_cb,
+            cancel_event=cancel_event,
+            expected_output=output_path,
+        )
+
+        if cancel_event.is_set():
+            try:
+                output_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return True
+        if not ok:
+            # ffmpeg leaves a partial file behind on a failed encode; a
+            # failed conversion must not ship a broken gif that looks done.
+            try:
+                output_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise RuntimeError(error_message or "ffmpeg failed")
+        return False
 
     @staticmethod
     def _save(image: Image.Image, output_path: Path, target_format: str, options: dict) -> None:

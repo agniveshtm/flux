@@ -2,14 +2,15 @@
 
 ## Overview
 
-Flux is a desktop file converter application for general consumers. It provides a simple, offline-first interface for converting between common image formats (JPG, PNG, WebP, ICO, AVIF, GIF and HEIC/HEIF). The application runs entirely offline, packaged as a native Windows installer.
+Flux is a desktop file converter application for general consumers. It provides a simple, offline-first interface for converting between common image formats (JPG, PNG, WebP, ICO, AVIF, GIF and HEIC/HEIF), and — since Phase 2.1 — for converting video into MP4, still frames and animated GIF. Conversion itself runs entirely offline — the only network traffic is the optional in-app update check — and the app is packaged as a native Windows installer.
 
-**Tech Stack**: Python + pywebview (desktop shell), Vue 3 + Tailwind CSS (frontend, in `src/flux/frontend`), Pillow + pillow-heif (image conversion), PyInstaller + Inno Setup (packaging).
+**Tech Stack**: Python + pywebview (desktop shell), Vue 3 + Tailwind CSS (frontend, in `src/flux/frontend`), Pillow + pillow-heif (image conversion), a vendored ffmpeg sidecar binary (video conversion, `vendor/ffmpeg.exe`), PyInstaller + Inno Setup (packaging).
 
 ## Goals
 
 - Provide a clean, CloudConvert-inspired UI (crimson-red + black theme with light/dark toggle) for file conversion
 - Support all seven image formats in both directions (Phase 1.1 + 1.3): JPG, PNG, WebP, ICO, AVIF, GIF, HEIC
+- Convert video: video containers to MP4, video to still frames, and clips to animated GIF (Phase 2.1, capability-gated on ffmpeg)
 - Work fully offline — no CDN dependencies, Vue vendored locally, Tailwind compiled via standalone CLI
 - Distribute via a single Windows installer (Inno Setup) built with PyInstaller
 - Keep conversion operations off the UI thread with progress reporting
@@ -67,10 +68,47 @@ Deliberate limits:
   (cairosvg, svglib) require cairo, which is unavailable on the build host, and
   raster→SVG output is a potrace-class tracing feature, not a converter feature.
 
+## Phase 2.1 — Video conversion
+
+Adds video as an input family and MP4 as an output, driven by a vendored
+ffmpeg sidecar (`vendor/ffmpeg.exe`, gyan.dev essentials 9.0.2). The
+input→target matrix is still derived entirely from the registry — a video
+row offers MP4 plus every still target (the first frame is extracted and
+run through the ordinary Pillow pipeline); a GIF row offers every image
+target plus MP4, because a GIF is an animation and the video converter
+reads it.
+
+| Conversion | Notes |
+|--------|-------|
+| Video → MP4 | H.264 first (`libx264`, falling back to `libvpx-vp9` by availability), CRF mapped per codec from the quality slider, AAC audio, `+faststart`. |
+| Video → stills | First frame extracted to a temp PNG, then the normal image pipeline; the temp file is always cleaned up. |
+| Video → GIF | Full animation through ffmpeg's palette chain (`palettegen`/`paletteuse`, fps 15, width capped at 480px), `-loop 0`. |
+| GIF → MP4 | GIF accepted as a video input of the video converter. |
+
+Deliberate limits:
+
+- MP4 is the only video **output** in Phase 2.1 (WebM/MKV/MOV etc. are
+  Phase 2.2+).
+- Image → MP4 is not offered: a one-frame clip is a worse still image, and
+  nothing sensible plays it as a video.
+- Everything video is capability-gated: without a capable ffmpeg build the
+  converter registers nothing, the matrix has no video rows, and the app is
+  exactly the image-only converter it was before.
+- GIF appears in **both** rings of the format donut (image and video), since
+  the same pair — gif → mp4, clip → gif — is a video conversion, while
+  still → gif remains an image one; the grouping ships from the backend in
+  `getSupportedFormats().rings`.
+- Release packaging is an open item: `locate_ffmpeg` already looks for
+  `ffmpeg.exe` beside the frozen executable, but the Inno Setup script does
+  not ship it yet, so packaged builds currently run image-only — and bundling
+  the 105 MB binary collides with the <100 MB installer success criterion.
+
 
 ## Non-Goals
 
-- **Video conversion (Phase 2)** — explicitly deferred; leaning toward ffmpeg but not in v1.0
+- **Video outputs beyond MP4 (WebM, MKV, MOV, AVI) and audio extraction** —
+  Phase 2.2+/not in scope yet; MP4 is the only video target for now
+  (video *inputs* were un-deferred in Phase 2.1, 2026-10-24)
 - Cloud/online conversion features — app must work fully offline
 - macOS/Linux installers in v1.0 — Windows only initially
 - Batch folder processing — single/multiple file selection only
@@ -122,3 +160,19 @@ Deliberate limits:
 - [x] AVIF output unchanged after registration (quality, speed, ICC)
 - [x] A build without pillow-heif runs and simply omits the format
 - [x] Tests pass on both CI legs
+
+## Phase 2.1 acceptance criteria
+
+- [x] Video containers convertible to MP4; a format is never a target of itself
+- [x] Video inputs convertible to every still target via frame extraction
+- [x] GIF → MP4 and video → animated GIF both work end to end
+- [x] GIF listed in both donut rings from the backend `rings` payload
+- [x] A build without ffmpeg is image-only and every test still passes
+      (fake-backed suite runs with no binary at all)
+- [x] Vendored binary SHA-256-verified against the release digest and ships
+      libx264 — pinned by `test_the_vendored_build_includes_libx264`
+- [x] Real-ffmpeg encodes decode back cleanly (`ffmpeg -v error … -f null -`)
+- [x] Tests 111 → 141; check-frontend and all four UI checks green
+- [ ] Release packaging: installer ships `ffmpeg.exe` next to `flux.exe`
+      (open — see the packaging note in Phase 2.1; also affects the <100 MB
+      installer criterion)

@@ -32,6 +32,16 @@ window.Flux.FormatDonut = {
       type: Object,
       default: () => ({}),
     },
+    // Ring membership: { image: [formats], video: [formats] }, as reported
+    // by the backend's getSupportedFormats().rings. GIF arrives in both
+    // rings - image conversion from stills, video conversion from clips -
+    // and that dual membership is the backend's answer, not a rule this
+    // component may invent. Falls back to grouping formats by `kinds` when
+    // an older payload has no rings key.
+    rings: {
+      type: Object,
+      default: null,
+    },
     // The format currently targeted.
     active: {
       type: String,
@@ -71,6 +81,13 @@ window.Flux.FormatDonut = {
   computed: {
     // The formats of each kind, in the order the backend listed them.
     groups() {
+      if (this.rings && Array.isArray(this.rings.image)) {
+        const byKind = {};
+        Object.keys(this.rings).forEach((kind) => {
+          byKind[kind] = (this.rings[kind] || []).map(String);
+        });
+        return byKind;
+      }
       const byKind = {};
       (this.formats || []).forEach((format) => {
         const id = String(format);
