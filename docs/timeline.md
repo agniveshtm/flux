@@ -168,3 +168,21 @@ through as literals. Tested in Git Bash - curl receives exactly two arguments.
   1. **flux.spec: pillow-heif import is now guarded.** The `_pillow_heif_binaries()` function wrapped `import pillow_heif` in try/except, returning `[]` when the package is absent. This prevents PyInstaller builds from failing before the app can apply its runtime gate.
 
   2. **test_formats.py: added HEIF gateway handling.** `test_frontend_mock_matches_backend_formats` now strips heic/heif from the mock when `_heif_available()` is false, matching AVIF's treatment. Without this, a dev environment missing pillow-heif would see stale entries in the browser fallback picker.
+
+## 2026-10-24 (Phase 2.1 — video, GIF, vendored ffmpeg)
+
+- Landed Phase 2.1 end to end: video containers (mp4, mov, mkv, avi, webm, m4v, wmv, flv, mpg, mpeg, mts, m2ts, ts, 3gp, ogv) convert to **MP4** through a new `FFmpegVideoConverter`, and to every still target via ffmpeg frame extraction (temp PNG, always cleaned up). The input→target matrix stays fully registry-derived — no table in the frontend.
+
+- Vendored the sidecar: `vendor/ffmpeg.exe` = gyan.dev essentials **9.0.2** (GPLv3, ships libx264), downloaded from the GyanD/codexffmpeg mirror and SHA-256-verified against the GitHub release digest. Provenance + re-download recipe in `vendor/README.md`, `vendor/*.exe` gitignored. Codec stays libx264-first. Rationale in DECISIONS 2026-10-24, which finalizes the tentative ffmpeg lean from DECISIONS 2026-09-19.
+
+- GIF became a video format too: gif → MP4 (the video converter reads gif as an input), video → **animated** GIF (the report's palette chain — `palettegen`/`paletteuse`, fps 15, `-loop 0`), and the donut shows GIF in both rings via a new `rings` payload on `getSupportedFormats()`. The report's `scale=…:-1` turned out to be an ellipsis placeholder, not valid ffmpeg — the width is now an explicit 480px cap. Architecture rationale in DECISIONS 2026-10-24.
+
+- Both encodes run through one shared `run_ffmpeg()` pump (out_time/`Duration` progress, CRLF-stripped lines, the three-rung cancel chain) — converters only build command lines. Image → MP4 remains deliberately excluded (one-frame clip).
+
+- Tests **111 → 141**: gif/ring/matrix pins in `test_formats.py`, three new fake-backed GIF tests (the stand-in gained a GIF-output branch), and `test_vendor_ffmpeg.py` with four **real-ffmpeg** tests (decode-validated MP4, gif `n_frames > 1`, gif→MP4, vendored libx264 pin) that skip when no binary resolves. Gates green: pytest 141 passed, check-frontend, all four UI checks (`check-donut.js` now expects GIF+MP4 slices instead of the single-circle placeholder).
+
+- PRD revised (scope change): video moved out of Non-Goals into a `## Phase 2.1` section with its own acceptance criteria; Non-Goals now names only video *outputs* beyond MP4. ARCHITECTURE updated (data-flow diagram, converter interface, sidecar, folder tree).
+
+- **Open:** release packaging — `locate_ffmpeg` already checks beside the frozen exe, but `installer/flux.iss` does not ship `ffmpeg.exe` yet, so packaged builds run image-only; bundling the 105 MB binary also collides with the "<100 MB installer" success criterion. Needs a call before the next release.
+
+- Committed as `9572d8c` on `feature`: `feat(app): add video conversion, animated gif, and bundled ffmpeg`.

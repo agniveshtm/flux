@@ -14,15 +14,25 @@ flowchart LR
         API["API Layer\n(window.py)"]
         Conv["Converter Interface\n(converter.py)"]
         ImgConv["PillowImageConverter\n(image_converter.py)"]
+        VidConv["FFmpegVideoConverter\n(video_converter.py)"]
+        FFmpegSvc["ffmpeg service\n(services/ffmpeg.py)"]
         FS["Filesystem\n(OS)"]
     end
+
+    FFmpeg["vendor/ffmpeg.exe\n(sidecar process)"]
 
     FE -- "convert(files, format, options)" --> Bridge
     Bridge -- "calls Python API" --> API
     API -- "delegates to" --> Conv
     Conv -- "uses" --> ImgConv
+    Conv -- "uses" --> VidConv
+    ImgConv -- "video→stills, video→GIF" --> FFmpegSvc
+    VidConv -- "builds argv; shares the pump" --> FFmpegSvc
+    FFmpegSvc -- "argv + pipes: progress, cancel" --> FFmpeg
     ImgConv -- "reads/writes" --> FS
+    FFmpeg -- "reads/writes" --> FS
     ImgConv -- "progress callbacks" --> API
+    VidConv -- "progress callbacks" --> API
     API -- "emits progress events" --> Bridge
     Bridge -- "updates UI" --> FE
 ```
@@ -34,7 +44,7 @@ flowchart LR
 | `convert` | `{ files: { name, size, type, path }[], targetFormat: string, options?: { outputDir: string, quality?: number, dither?: boolean, icoSizes?: number[] } }` | `{ jobId: string }` | `VALIDATION_ERROR`, `UNSUPPORTED_FORMAT` |
 | `getProgress` | `{ jobId: string }` | `{ status: 'pending'\|'running'\|'complete'\|'error', progress: 0-100, outputPaths?: string[], outputs?: { input: string, output: string }[], error?: string }` | `NOT_FOUND` |
 | `cancel` | `{ jobId: string }` | `{ cancelled: boolean }` | `NOT_FOUND`, `ALREADY_COMPLETE` |
-| `getSupportedFormats` | — | `{ input: string[], output: string[] }` — the single source of truth for the UI's conversion matrix | — |
+| `getSupportedFormats` | — | `{ input: string[], output: string[], kinds: Record<format, 'image'\|'video'>, targets: Record<input, format[]>, rings: { image: format[], video: format[] } }` — the single source of truth for the UI's conversion matrix *and* the donut's ring grouping (GIF appears in both rings) | — |
 | `pickFiles` | `{ multiple?: boolean }` | `{ paths: string[] }` | `CANCELLED` |
 | `pickOutputDir` | — | `{ path: string }` | `CANCELLED` |
 | `openOutputDir` | `{ path: string }` | `{ opened: boolean }` | `VALIDATION_ERROR`, `OPEN_ERROR` |
@@ -129,9 +139,9 @@ artifact is a Windows installer - so anywhere else it returns
 
 - **UI thread**: pywebview main loop + Vue frontend (single-threaded JS)
 - **Conversion thread**: Each `convert` call spawns a `threading.Thread` running the converter
-- **Progress channel**: Converter accepts a `progress_cb(current, total)` callable; backend pushes updates via `window.evaluate_js()` to a Vue-side event bus
+- **Progress channel**: Converter accepts a `progress_cb(current, total)` callable (float `current` within a file, integral at file boundaries, so a batch bar advances monotonically); backend pushes updates via `window.evaluate_js()` to a Vue-side event bus
 - **Job registry**: In-memory dict `jobId → { thread, converter, status, progress, outputPaths, outputs, error }`; cleaned up on completion or explicit cancel. A terminal status deletes the entry, so a poll that arrives afterwards gets `NOT_FOUND` — the frontend treats a response with no recognizable `status` as terminal rather than polling a job that no longer exists
-- **Cancellation**: Cooperative — converter checks a `threading.Event` flag between files/operations
+- **Cancellation**: Cooperative — converter checks a `threading.Event` flag between files/operations. Inside one ffmpeg encode the same Event drives `run_ffmpeg`'s three-rung chain: `q` on stdin (exit 0) → `CTRL_BREAK` (exit 255) → process-tree kill after a 10 s grace; exits 0-on-cancel and 255 both read as *cancelled*, never as an error, and the partial output is unlinked
 
 ### Matching outputs to rows
 
@@ -142,7 +152,7 @@ output after a failure onto the wrong row. `ConversionResult.outputs` carries
 `{ input, output }[]`, and the frontend matches on the input path. Rows with no
 matching output are the ones that failed and are shown as such.
 
-## Converter Interface (Extensible for Phase 2)
+## Converter Interface (Phase 1 images + Phase 2.1 video)
 
 ```python
 # src/flux/converter.py
@@ -165,6 +175,11 @@ class BaseConverter(ABC):
     @abstractmethod
     def supported_output_formats(self) -> list[str]: ...
 
+    @property
+    def also_video_outputs(self) -> tuple[str, ...]:
+        """Outputs that are also video conversions (default: none)."""
+        ...
+
     @abstractmethod
     def convert(
         self,
@@ -172,7 +187,7 @@ class BaseConverter(ABC):
         output_dir: str,
         target_format: str,
         options: dict,
-        progress_cb: Callable[[int, int], None],
+        progress_cb: Callable[[float, float], None],  # (current, total)
         cancel_event: threading.Event,
     ) -> ConversionResult: ...
 ```
@@ -188,8 +203,26 @@ class BaseConverter(ABC):
   so a build without pillow-heif simply does not offer it either. Both `.heic`
   and `.heif` are accepted as inputs (same container); `heic` is the single
   canonical output, following the `jpeg`/`jpg` precedent.
-- **Phase 2**: `FFmpegVideoConverter` will implement same interface; frontend contract unchanged
-- **Registry**: `ConverterRegistry` maps format → converter instance; `get_converter_for_format()` selects at runtime
+- **Phase 2.1**: `FFmpegVideoConverter` (`video_converter.py`) implements the
+  same interface, writing MP4 only and reading the video containers **plus
+  GIF**. All ffmpeg process machinery — binary location, the `-encoders`
+  capability probe, progress parsing from `out_time`/`Duration`, and the
+  three-rung cancel chain — lives once in `services/ffmpeg.py::run_ffmpeg`;
+  the video converter builds command lines and the image converter reuses the
+  same pump for video→GIF. Gated on `video_available()` end to end: without a
+  capable build the converter registers nothing and the matrix stays
+  image-only. `MP4_ENCODERS` preference is libx264 first (DECISIONS
+  2026-10-24).
+- **GIF dual membership**: GIF is written by the image converter — stills
+  through Pillow, clips through ffmpeg's palette chain — and the video
+  converter merely *reads* it. `also_video_outputs` declares that a format
+  can belong to the video ring as well, so the donut's grouping ships as
+  registry data (`supported_output_rings` → `getSupportedFormats().rings`)
+  instead of a frontend rule.
+- **Registry**: `ConverterRegistry` maps format → converter instance;
+  `get_converter_for_format()` selects at runtime, `supported_targets_by_input`
+  derives the input→target matrix (self-pairings excluded), and
+  `supported_output_rings` derives the donut's ring membership.
 - **Encoder dispatch**: `_save` rejects any target with no encoder, rather than
   falling through to the last branch — otherwise a format added to
   `OUTPUT_FORMATS` without an encoder would write the previous format's bytes
@@ -207,6 +240,14 @@ The app's runtime dependencies are deliberately minimal (Architecture decision 3
 
 `pyinstaller` is **build tooling only** (in the `dev` dependency group) — it
 produces the frozen exe and is never imported by the running app.
+
+**Sidecar (not a Python dependency)**: `vendor/ffmpeg.exe` — gyan.dev
+essentials 9.0.2, GPLv3, ~105 MB, `libx264` included (DECISIONS 2026-10-24).
+`locate_ffmpeg()` resolves it beside the frozen executable first (the Inno
+Setup deployment path), then `vendor/` in a source checkout, then PATH as a
+dev convenience. It is never linked: invocation is argv + pipes, which keeps
+the GPL with the binary. `vendor/*.exe` is gitignored; `vendor/README.md`
+carries the source URL, version and SHA-256.
 
 ## Folder Structure
 
@@ -230,11 +271,13 @@ flux/
 │       ├── __init__.py           # __version__ (runtime version source)
 │       ├── main.py               # pywebview entry point + --version/--help
 │       ├── window.py             # API exposure + JS bridge
-│       ├── converter.py          # BaseConverter ABC + registry
-│       ├── services/
-│       │   ├── image_converter.py  # PillowImageConverter
-│       │   └── updater.py         # GitHub release check + installer download
-│       ├── assets/                 # favicons, logos
+│   ├── converter.py          # BaseConverter ABC + registry
+│   ├── services/
+│   │   ├── ffmpeg.py          # locate/probe/gate + shared run_ffmpeg pump
+│   │   ├── image_converter.py  # PillowImageConverter (+ video→stills/GIF)
+│   │   ├── video_converter.py  # FFmpegVideoConverter (MP4 out, gif in)
+│   │   └── updater.py         # GitHub release check + installer download
+│   ├── assets/                 # favicons, logos
 │       └── frontend/               # Vue 3 + Tailwind (vendored)
 │           ├── index.html
 │           ├── src/
@@ -253,7 +296,8 @@ flux/
 │       ├── check-picker.js       # row picker's popover: open, pick, Escape, focus
 │       ├── check-app.js          # the shipped frontend mounts clean, over file://
 │       └── measure.js            # prints the rendered geometry
-├── tests/                        # pytest suite (version + updater)
+├── tests/                        # pytest suite (version + updater + format matrix + video)
+├── vendor/                       # ffmpeg sidecar (exe gitignored; README pins URL/version/SHA-256)
 ├── flux.spec                     # PyInstaller spec (dist/flux.exe)
 ├── pyproject.toml
 ├── uv.lock
