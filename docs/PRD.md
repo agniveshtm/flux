@@ -2,7 +2,7 @@
 
 ## Overview
 
-Flux is a desktop file converter application for general consumers. It provides a simple, offline-first interface for converting between common image formats (JPG, PNG, WebP, ICO, AVIF, GIF and HEIC/HEIF), and — since Phase 2.1 — for converting video into MP4, still frames and animated GIF. The application runs entirely offline, packaged as a native Windows installer.
+Flux is a desktop file converter application for general consumers. It provides a simple, offline-first interface for converting between common image formats (JPG, PNG, WebP, ICO, AVIF, GIF and HEIC/HEIF), and — since Phase 2.1 — for converting video into MP4, still frames and animated GIF. Conversion itself runs entirely offline — the only network traffic is the optional in-app update check — and the app is packaged as a native Windows installer.
 
 **Tech Stack**: Python + pywebview (desktop shell), Vue 3 + Tailwind CSS (frontend, in `src/flux/frontend`), Pillow + pillow-heif (image conversion), a vendored ffmpeg sidecar binary (video conversion, `vendor/ffmpeg.exe`), PyInstaller + Inno Setup (packaging).
 

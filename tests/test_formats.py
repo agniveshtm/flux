@@ -147,6 +147,15 @@ def test_frontend_mock_kinds_match_the_backend() -> None:
     """
     kinds = _js_format_kinds()
 
+    if not _avif_available():
+        # Same tolerance as test_frontend_mock_matches_backend_formats: the
+        # mock's kinds map is a static literal, while OUTPUT_FORMATS below is
+        # gated on the local Pillow build, so a format this build cannot write
+        # has to come off the mock side of the comparison.
+        kinds.pop("avif", None)
+    if not _heif_available():
+        kinds.pop("heic", None)
+
     expected_outputs = set(OUTPUT_FORMATS)
     expected_values = {"image"}
     if video_available():

@@ -23,7 +23,13 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
-from flux.converter import BaseConverter, ConversionResult, UnsupportedFormatError, normalize_format
+from flux.converter import (
+    BaseConverter,
+    ConversionResult,
+    UnsupportedFormatError,
+    normalize_format,
+    reserve_unique_output,
+)
 from flux.services.ffmpeg import (
     VIDEO_INPUT_FORMATS,
     locate_ffmpeg,
@@ -166,6 +172,7 @@ class FFmpegVideoConverter(BaseConverter):
 
             source = Path(input_path).expanduser()
             cancelled_mid_file = False
+            output_path: Path | None = None
             try:
                 if not source.is_file():
                     raise FileNotFoundError(f"Input file does not exist: {source}")
@@ -176,18 +183,12 @@ class FFmpegVideoConverter(BaseConverter):
                         f"Unsupported input format: {input_format or 'unknown'}"
                     )
 
-                # Deduplicate like the image converter does: against names
-                # already claimed in this batch and against files that exist,
-                # so a re-run adds video-1.mp4 rather than silently
-                # overwriting the previous conversion.
-                stem = source.stem
-                output_name = f"{stem}.mp4"
-                counter = 1
-                while output_name in used_names or (output_directory / output_name).exists():
-                    output_name = f"{stem}-{counter}.mp4"
-                    counter += 1
-                used_names.add(output_name)
-                output_path = output_directory / output_name
+                # Claim the name atomically (see reserve_unique_output):
+                # exists() alone lets two concurrent jobs pick the same name
+                # and let -y replace one finished result with the other's.
+                output_path = reserve_unique_output(
+                    output_directory, source.stem, "mp4", used_names
+                )
 
                 ok, error_message = self._encode_one(
                     ffmpeg=ffmpeg,
@@ -205,9 +206,9 @@ class FFmpegVideoConverter(BaseConverter):
                     # The "q" path finalises a playable file, but a cancelled
                     # job reports no outputs - leaving the half-length video
                     # on disk would look like a conversion that quietly
-                    # succeeded with the wrong duration. It was created in
-                    # this loop (the name was deduplicated above), so removing
-                    # it cannot touch anything pre-existing.
+                    # succeeded with the wrong duration. The name was
+                    # reserved above, so the path is this job's alone and
+                    # removing it cannot touch anything pre-existing.
                     try:
                         output_path.unlink(missing_ok=True)
                     except OSError:
@@ -215,13 +216,6 @@ class FFmpegVideoConverter(BaseConverter):
                     cancelled_mid_file = True
                     result.errors.append("Conversion cancelled")
                 elif not ok:
-                    # ffmpeg leaves a partial file behind on a failed
-                    # encode; a failed conversion must not ship a broken
-                    # file that looks finished.
-                    try:
-                        output_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
                     raise RuntimeError(error_message or "ffmpeg failed")
                 else:
                     result.output_paths.append(str(output_path))
@@ -230,6 +224,16 @@ class FFmpegVideoConverter(BaseConverter):
                     # on the path it sent (same reason as the image converter).
                     result.outputs.append((input_path, str(output_path)))
             except Exception as exc:
+                # A failed file leaves two things behind: the 0-byte name
+                # reserve_unique_output claimed, and any partial ffmpeg
+                # wrote over it. Both would outlive the error and look like
+                # a finished result, so the claimed path goes away with the
+                # failure.
+                if output_path is not None:
+                    try:
+                        output_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 result.errors.append(f"{source.name}: {exc}")
             finally:
                 progress_cb(index, total)
@@ -258,7 +262,8 @@ class FFmpegVideoConverter(BaseConverter):
         -nostats silences the human-readable stats line so stderr stays a
         small parseable log (where -loglevel info yields the Duration);
         -stats_period 0.25 doubles the tick rate for a smoother bar; -y
-        overwrites a name the dedup pass already proved free (race guard).
+        overwrites the 0-byte placeholder reserve_unique_output claimed (the
+        claim, not -y, is the race guard).
 
         Progress, the stdout drain and the three-rung cancel chain are the
         shared engine's job (flux.services.ffmpeg.run_ffmpeg); everything

@@ -8,7 +8,7 @@ from typing import Callable
 
 from PIL import Image, ImageOps, features
 
-from flux.converter import BaseConverter, ConversionResult, UnsupportedFormatError, normalize_format
+from flux.converter import BaseConverter, ConversionResult, UnsupportedFormatError, normalize_format, reserve_unique_output
 from flux.services.ffmpeg import VIDEO_INPUT_FORMATS, locate_ffmpeg, run_ffmpeg, video_available
 
 def _avif_available() -> bool:
@@ -153,6 +153,7 @@ class PillowImageConverter(BaseConverter):
 
             source = Path(input_path).expanduser()
             cancelled_mid_file = False
+            output_path: Path | None = None
             try:
                 if not source.is_file():
                     raise FileNotFoundError(f"Input file does not exist: {source}")
@@ -163,15 +164,12 @@ class PillowImageConverter(BaseConverter):
                         f"Unsupported input format: {input_format or 'unknown'}"
                     )
 
-                stem = source.stem
-                output_name = f"{stem}.{target}"
-                counter = 1
-                while output_name in used_names or (output_directory / output_name).exists():
-                    output_name = f"{stem}-{counter}.{target}"
-                    counter += 1
-                used_names.add(output_name)
-
-                output_path = output_directory / output_name
+                # Claim the name atomically (see reserve_unique_output):
+                # exists() alone lets two concurrent jobs pick the same name
+                # and then overwrite each other's finished output.
+                output_path = reserve_unique_output(
+                    output_directory, source.stem, target, used_names
+                )
 
                 if target == "gif" and input_format in VIDEO_INPUT_FORMATS:
                     # A clip becomes a full animation, not a still frame:
@@ -238,6 +236,15 @@ class PillowImageConverter(BaseConverter):
                     # file as failed.
                     result.outputs.append((input_path, str(output_path)))
             except Exception as exc:
+                # The reservation is a 0-byte placeholder until _save writes
+                # over it; a failure between claim and encode would leave
+                # that empty file looking like an output, so it goes away
+                # with the failure (the gif path unlinks its own partial).
+                if output_path is not None:
+                    try:
+                        output_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 result.errors.append(f"{source.name}: {exc}")
             finally:
                 progress_cb(index, total)
@@ -311,11 +318,13 @@ class PillowImageConverter(BaseConverter):
 
         The palette chain from the report (research table, GIF row): fps and
         a lanczos scale, then split into palettegen (stats_mode=diff) and
-        paletteuse (dither=sierra2_4a). A plain transcode quantises each
-        frame independently and the result flickers between frames; the
-        two-pass palette is the difference between "a gif" and "the gif".
-        -loop 0 keeps the output looping forever, which is what every gif
-        consumer expects and what Pillow writes for animated sources too.
+        paletteuse, whose dither honours the UI's dither option just like
+        Pillow's still-GIF path does (sierra2_4a on, none off). A plain
+        transcode quantises each frame independently and the result flickers
+        between frames; the two-pass palette is the difference between "a
+        gif" and "the gif". -loop 0 keeps the output looping forever, which
+        is what every gif consumer expects and what Pillow writes for
+        animated sources too.
 
         Runs through run_ffmpeg like every other encode, so Cancel behaves
         identically here - "q" finalises, 255 still reads as cancelled, and
@@ -343,10 +352,19 @@ class PillowImageConverter(BaseConverter):
         # filter argument parser would otherwise split it into a second
         # filter. The palette half is the report's two-pass chain: a plain
         # transcode quantises each frame independently and flickers.
+        # The dither checkbox means the same thing here as on Pillow's
+        # palette path - _dither_option holds the one on/off rule (bool or
+        # name) both encoders read - with ffmpeg spelling it sierra2_4a
+        # (the report's default) or none.
+        dither = (
+            "sierra2_4a"
+            if PillowImageConverter._dither_option(options) is not Image.Dither.NONE
+            else "none"
+        )
         filter_chain = (
             f"fps={fps},scale=w=min(iw\\,480):h=-1:flags=lanczos,"
             "split[a][b];[a]palettegen=stats_mode=diff[p];"
-            "[b][p]paletteuse=dither=sierra2_4a"
+            f"[b][p]paletteuse=dither={dither}"
         )
         cmd = [
             str(ffmpeg),

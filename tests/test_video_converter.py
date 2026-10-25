@@ -31,7 +31,7 @@ from PIL import Image
 import flux.services.ffmpeg as ffmpeg_module
 import flux.services.image_converter as image_converter_module
 import flux.services.video_converter as video_converter
-from flux.converter import UnsupportedFormatError
+from flux.converter import UnsupportedFormatError, reserve_unique_output
 from flux.services.ffmpeg import (
     CANCEL_GRACE_SECONDS,
     VIDEO_INPUT_FORMATS,
@@ -143,6 +143,11 @@ while time.time() < deadline:
     if mode == "ignore_q":
         if elapsed >= 1.0:
             sys.exit(255)
+    elif mode == "hang_on_q":
+        # Ignores "q" AND never leaves on its own: only a kill ends this
+        # encode, so a test can watch the cancel chain work through its
+        # rungs instead of the fake exiting underneath it.
+        pass
     elif saw_quit.is_set() or elapsed >= 1.0:
         with open(output, "wb") as fh:
             fh.write(b"ftypisom fake-mp4 payload")
@@ -325,6 +330,25 @@ def test_convert_refuses_targets_it_cannot_write(
         _convert(converter, ["clip.mp4"], tmp_path, target_format="webm")
 
 
+def test_flux_ffmpeg_env_override_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # vendor/README.md documents FLUX_FFMPEG as the escape hatch to a
+    # system build; a locate_ffmpeg() that never read the variable would
+    # make the documented knob a lie. It has to be checked first, before
+    # the frozen/vendor/PATH order below it.
+    override = tmp_path / "custom-ffmpeg.exe"
+    override.write_text("", encoding="utf-8")
+    monkeypatch.setenv("FLUX_FFMPEG", str(override))
+    assert ffmpeg_module.locate_ffmpeg() == override
+
+    # An override that resolves to nothing is honored as "missing" instead
+    # of falling through to vendor/: a bad path must surface as video being
+    # unavailable, not silently run a different binary than the one asked for.
+    monkeypatch.setenv("FLUX_FFMPEG", str(tmp_path / "absent.exe"))
+    assert ffmpeg_module.locate_ffmpeg() is None
+
+
 def test_pick_encoder_follows_the_preference_table(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -450,6 +474,30 @@ def test_rerun_deduplicates_the_output_name(
     assert (outdir / "clip-1.mp4").is_file()
 
 
+def test_reserve_unique_output_claims_names_without_a_probe_window(
+    tmp_path: Path,
+) -> None:
+    # What closes the exists() race: the claim *creates* the file (O_EXCL),
+    # so two concurrent jobs cannot both pass a probe-and-write and pick the
+    # same name - the loser of the claim takes the next suffix instead of
+    # letting ffmpeg's -y replace the winner's result.
+    first = reserve_unique_output(tmp_path, "clip", "mp4", set())
+    assert first == tmp_path / "clip.mp4"
+    assert first.is_file()
+
+    second = reserve_unique_output(tmp_path, "clip", "mp4", set())
+    assert second == tmp_path / "clip-1.mp4"
+
+    # A name an earlier file in the same batch claimed - and then unlinked
+    # on failure - stays taken for the rest of the batch: without the
+    # used_names check this claim would hand the dead file's name to a later
+    # input, because the unlink put it back on disk as free.
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    third = reserve_unique_output(fresh, "clip", "mp4", {"clip.mp4"})
+    assert third == fresh / "clip-1.mp4"
+
+
 def test_cancel_removes_the_partial_output(
     fake_ffmpeg: Path, tmp_path: Path
 ) -> None:
@@ -510,6 +558,47 @@ def test_exit_255_is_reported_as_a_cancel_not_a_failure(
         f"exit 255 leaked into the message: {result.errors}"
     )
     # It exited by itself, so the kill rung of the chain never fired.
+    assert elapsed < CANCEL_GRACE_SECONDS
+
+
+def test_an_ignored_q_still_fires_the_interrupt_rung(
+    fake_ffmpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The chain's middle rung. The fake receives "q" but keeps encoding and
+    # never self-exits, so only the interrupt (spied on, and killing the
+    # fake here so the rung is platform-independent) or the final kill can
+    # end the job. A successful "q" write that skipped the interrupt would
+    # leave this spy unfired and drag the job out to CANCEL_GRACE_SECONDS.
+    monkeypatch.setenv("FAKE_FFMPEG_MODE", "hang_on_q")
+    fired: list[int] = []
+
+    def interrupt_then_kill(proc) -> None:
+        fired.append(proc.pid)
+        ffmpeg_module.kill_process_tree(proc)
+
+    monkeypatch.setattr(ffmpeg_module, "send_interrupt", interrupt_then_kill)
+    clip = _make_clip(tmp_path)
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    cancel_event = Event()
+
+    def cancel_on_first_tick(current, total) -> None:
+        if isinstance(current, float):
+            cancel_event.set()
+
+    started = time.monotonic()
+    result = _convert(
+        FFmpegVideoConverter(),
+        [str(clip)],
+        outdir,
+        progress_cb=cancel_on_first_tick,
+        cancel_event=cancel_event,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.errors == ["Conversion cancelled"], result.errors
+    assert fired, "q was delivered but the interrupt rung never fired"
+    # Interrupt + kill at the quit grace, not the grace-period kill path.
     assert elapsed < CANCEL_GRACE_SECONDS
 
 
@@ -748,6 +837,9 @@ def test_video_to_gif_runs_the_palette_chain_and_writes_an_animation(
     assert argv[-1] == str(output)
     filter_chain = argv[argv.index("-vf") + 1]
     assert "palettegen" in filter_chain and "paletteuse" in filter_chain
+    assert "dither=sierra2_4a" in filter_chain, (
+        "dither defaults to on, and on is the report's sierra2_4a"
+    )
     assert "fps=" in filter_chain
     assert argv[argv.index("-loop") + 1] == "0"
     assert "-frames:v" not in argv
@@ -760,6 +852,23 @@ def test_video_to_gif_runs_the_palette_chain_and_writes_an_animation(
     ), f"progress went backwards: {currents}"
     assert any(isinstance(current, float) for current in currents)
     assert seen[-1] == (1, 1)
+
+    # The dither option reaches the chain instead of the hardcoded default:
+    # off is spelled "none", through the same on/off rule
+    # _dither_option applies on Pillow's still-GIF path.
+    second = PillowImageConverter().convert(
+        input_paths=[str(clip)],
+        output_dir=str(outdir),
+        target_format="gif",
+        options={"dither": False},
+        progress_cb=lambda current, total: None,
+        cancel_event=Event(),
+    )
+    assert not second.errors, second.errors
+    second_argv = argv_file.read_text(encoding="utf-8").splitlines()
+    second_chain = second_argv[second_argv.index("-vf") + 1]
+    assert "dither=none" in second_chain, second_chain
+    assert "dither=sierra2_4a" not in second_chain
 
 
 def test_image_converter_advertises_gif_to_the_video_ring(

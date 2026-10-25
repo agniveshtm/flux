@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Event
 from typing import Callable
 
@@ -28,6 +30,45 @@ def normalize_format(value: str) -> str:
     if normalized == "heif":
         return "heic"
     return normalized
+
+
+def reserve_unique_output(
+    output_directory: Path, stem: str, target_format: str, used_names: set[str]
+) -> Path:
+    """Claim a free output name for one file, returning its (reserved) path.
+
+    The name is reserved by *creating* it with O_CREAT|O_EXCL rather than
+    probed with exists(): the window between a successful exists() check and
+    ffmpeg/Pillow writing the file lets two concurrent conversions of the
+    same input both pick "clip.mp4", and the later -y/overwrite would
+    silently replace the other job's finished result. O_EXCL makes exactly
+    one claim win; the loser sees FileExistsError and takes the next suffix.
+
+    The 0-byte reservation is the output's placeholder - the encoder
+    overwrites it in place - so a file whose conversion then fails must
+    unlink it; each convert() does that in its except handler, and the
+    cancel paths unlink the partial themselves. Other OS errors (a
+    permission problem, a full disk) propagate as the conversion error they
+    are rather than looping forever.
+    """
+    counter = 0
+    while True:
+        name = (
+            f"{stem}.{target_format}"
+            if counter == 0
+            else f"{stem}-{counter}.{target_format}"
+        )
+        counter += 1
+        if name in used_names:
+            continue
+        path = output_directory / name
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            continue
+        os.close(fd)
+        used_names.add(name)
+        return path
 
 
 class BaseConverter(ABC):

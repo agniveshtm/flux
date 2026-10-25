@@ -52,10 +52,23 @@ def locate_ffmpeg() -> Path | None:
     """Find the ffmpeg binary, or None if unavailable.
 
     Resolution order:
-    1. Frozen build: ffmpeg.exe beside sys.executable (Inno Setup sibling).
-    2. Source checkout: vendor/ffmpeg.exe at the repo root.
-    3. PATH (dev convenience only; not a supported deployment).
+    1. FLUX_FFMPEG: an explicit override - a path or a bare command name
+       (documented in vendor/README.md for pointing Flux at a system build).
+       An unresolvable override is honored as "missing" rather than silently
+       falling through, so a bad path surfaces as video being unavailable
+       instead of the wrong binary running.
+    2. Frozen build: ffmpeg.exe beside sys.executable (Inno Setup sibling).
+    3. Source checkout: vendor/ffmpeg.exe at the repo root.
+    4. PATH (dev convenience only; not a supported deployment).
     """
+    override = os.environ.get("FLUX_FFMPEG", "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+        if candidate.is_file():
+            return candidate
+        found = shutil.which(override)
+        return Path(found) if found else None
+
     name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
 
     if getattr(sys, "frozen", False):
@@ -162,6 +175,11 @@ _EXIT_CANCELLED = 255
 # killed outright. Generous: the stdin check runs at most every 100 ms, so
 # anything still alive after this has lost its stdin and is wedged.
 CANCEL_GRACE_SECONDS = 10.0
+
+# How long a successful "q" gets before the cancel chain falls back to
+# CTRL_BREAK. Short: real ffmpeg reads stdin within a tick, so a process
+# still running past this has ignored the polite request.
+_QUIT_GRACE_SECONDS = 2.0
 
 
 def parse_out_time(block: str) -> float | None:
@@ -294,10 +312,10 @@ def run_ffmpeg(
       the Duration parsed from stderr - completed_before + elapsed/duration,
       so a multi-file batch advances monotonically across file boundaries.
     * cancellation runs on three rungs: "q" on stdin (exit 0, primary),
-      CTRL_BREAK (exit 255, fallback when stdin is gone), and a process-tree
-      kill after CANCEL_GRACE_SECONDS. Exit 0 on the cancel path or 255 from
-      ffmpeg both mean "cancelled", never "error" - surfacing 255 as a
-      failure shows users a bogus error on Cancel.
+      CTRL_BREAK (exit 255, fallback when stdin is gone or q is ignored),
+      and a process-tree kill after CANCEL_GRACE_SECONDS. Exit 0 on the
+      cancel path or 255 from ffmpeg both mean "cancelled", never "error" -
+      surfacing 255 as a failure shows users a bogus error on Cancel.
 
     A cancelled run returns (True, None): the caller keys off its own
     cancel_event, which is what distinguishes the two success shapes.
@@ -370,8 +388,18 @@ def run_ffmpeg(
             if not cancel_event.wait(0.1):
                 continue
             state["cancelled_at"] = time.monotonic()
-            if not write_quit_command(proc):
-                send_interrupt(proc)
+            if write_quit_command(proc):
+                # "q" only asks ffmpeg to stop. Give it a beat to obey, and
+                # drop to the CTRL_BREAK rung only if it is still running -
+                # otherwise an ignored "q" would leave the chain one rung
+                # short and the job would wait out the whole cancel grace
+                # against the final kill alone.
+                deadline = time.monotonic() + _QUIT_GRACE_SECONDS
+                while not state["done"] and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                if state["done"]:
+                    break
+            send_interrupt(proc)
             break
 
     cancel_thread = Thread(target=watch_cancel, daemon=True)
