@@ -363,6 +363,34 @@ window.Flux.FormatDonut = {
           :aria-label="'Target format (' + mode + ')'"
         >
           <template v-if="isSingle">
+            <!-- The hit target: a stationary copy of the ring's band. It
+                 carries the handlers, so the single format stays
+                 selectable and focusable instead of being decorative. -->
+            <circle
+              :cx="centreX"
+              :cy="centreY"
+              :r="(outerRadius + innerRadius) / 2"
+              :stroke-width="outerRadius - innerRadius"
+              class="format-donut-hit format-donut-single-hit cursor-pointer"
+              role="option"
+              tabindex="0"
+              :aria-selected="slices[0].selected"
+              :aria-label="slices[0].label"
+              :style="{
+                opacity: (hovered === slices[0].id || slices[0].selected)
+                  ? 1
+                  : (hovered ? 0.55 : 0.75),
+              }"
+              @click="select(slices[0].id)"
+              @mouseenter="hovered = slices[0].id"
+              @mouseleave="hovered = ''"
+              @focus="hovered = slices[0].id"
+              @blur="hovered = ''"
+              @keydown.enter.prevent="select(slices[0].id)"
+              @keydown.space.prevent="select(slices[0].id)"
+            >
+              <title>{{ slices[0].label }}</title>
+            </circle>
             <circle
               :cx="centreX"
               :cy="centreY"
@@ -386,6 +414,17 @@ window.Flux.FormatDonut = {
               :r="innerRadius + rimInset"
               class="format-donut-rim"
               :stroke="singleRim"
+            />
+            <!-- The focus hairline for the single ring: its well stroke is
+                 the ring's thickness, so the multi-slice focus rule cannot
+                 reuse it. Hidden until the hit circle has focus. -->
+            <circle
+              :cx="centreX"
+              :cy="centreY"
+              :r="outerRadius + 1.2"
+              :stroke-width="0.8"
+              class="format-donut-single-focus"
+              aria-hidden="true"
             />
           </template>
           <!-- A kind with no formats yet still shows a ring, so the picker
@@ -419,16 +458,16 @@ window.Flux.FormatDonut = {
                  background token, so it reads dark in dark mode and light
                  when the theme flips. The rim follows as its own path so
                  the border can sit inset from the well's edge with a margin
-                 of the well showing on every side. -->
+                 of the well showing on every side. The well is decorative:
+                 the stationary hit path below owns the pointer, so the
+                 hover lift can never slide the slice out from under the
+                 cursor and make the highlight flicker. -->
             <path
               v-for="slice in slices"
               :key="slice.id"
               :d="slice.path"
-              role="option"
-              tabindex="0"
-              :aria-selected="slice.selected"
-              :aria-label="slice.label"
-              class="format-donut-slice cursor-pointer"
+              aria-hidden="true"
+              class="format-donut-slice pointer-events-none"
               :class="{
                 'is-hovered': hovered === slice.id,
                 'is-selected': slice.selected,
@@ -440,16 +479,7 @@ window.Flux.FormatDonut = {
                   ? 1
                   : (hovered ? 0.55 : 0.75),
               }"
-              @click="select(slice.id)"
-              @mouseenter="hovered = slice.id"
-              @mouseleave="hovered = ''"
-              @focus="hovered = slice.id"
-              @blur="hovered = ''"
-              @keydown.enter.prevent="select(slice.id)"
-              @keydown.space.prevent="select(slice.id)"
-            >
-              <title>{{ slice.label }}</title>
-            </path>
+            />
             <path
               v-for="slice in slices"
               :key="'rim-' + slice.id"
@@ -469,6 +499,35 @@ window.Flux.FormatDonut = {
                   : (hovered ? 0.55 : 0.75),
               }"
             />
+            <!-- The hit targets: stationary copies of each slice that own
+                 the pointer and keyboard handlers. They never transform, so
+                 a hovered slice floating outward cannot carry its own hit
+                 area away from the cursor. Focus strokes them in the text
+                 colour, which is the same outline the eye sees on a slice. -->
+            <path
+              v-for="slice in slices"
+              :key="'hit-' + slice.id"
+              :d="slice.path"
+              role="option"
+              tabindex="0"
+              :aria-selected="slice.selected"
+              :aria-label="slice.label"
+              class="format-donut-hit cursor-pointer"
+              :style="{
+                opacity: (hovered === slice.id || slice.selected)
+                  ? 1
+                  : (hovered ? 0.55 : 0.75),
+              }"
+              @click="select(slice.id)"
+              @mouseenter="hovered = slice.id"
+              @mouseleave="hovered = ''"
+              @focus="hovered = slice.id"
+              @blur="hovered = ''"
+              @keydown.enter.prevent="select(slice.id)"
+              @keydown.space.prevent="select(slice.id)"
+            >
+              <title>{{ slice.label }}</title>
+            </path>
           </template>
           <text
             v-for="slice in slices"
