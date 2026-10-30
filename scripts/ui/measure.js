@@ -83,10 +83,14 @@ function arg(name, fallback) {
                      w: Math.round(r.width), h: Math.round(r.height),
                      selected: tile.getAttribute('aria-selected') };
           });
+        var rims = Array.prototype.map.call(
+          document.querySelectorAll('.format-donut path.format-donut-rim'),
+          function(p){ return p.getAttribute('stroke'); }
+        );
         var slices = Array.prototype.map.call(
-          document.querySelectorAll('.format-donut path[role="option"]'), function(p){
+          document.querySelectorAll('.format-donut path[role="option"]'), function(p, i){
             return { label: p.getAttribute('aria-label'),
-                     fill: p.getAttribute('fill'),
+                     rim: rims[i],
                      selected: p.getAttribute('aria-selected') };
           });
         var ring = document.querySelector('.format-donut');

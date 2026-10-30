@@ -54,10 +54,17 @@ const { check, fail, finish, instrumentFrontend, openPage, ok } = require('./lib
         var ringRect = ring.getBoundingClientRect();
         var centre = ring.parentElement.querySelector('button');
         var centreRect = centre.getBoundingClientRect();
+        // The colour lives in the rim: each well is theme-coloured, and its
+        // inset crimson border is a sibling path rendered in the same order,
+        // so the pair is made by index.
+        var rims = Array.prototype.map.call(
+          document.querySelectorAll('.format-donut path.format-donut-rim'),
+          function(p){ return p.getAttribute('stroke'); }
+        );
         var slices = Array.prototype.map.call(
-          document.querySelectorAll('.format-donut path[role="option"]'), function(p){
+          document.querySelectorAll('.format-donut path[role="option"]'), function(p, i){
             return { label: p.getAttribute('aria-label'),
-                     fill: p.getAttribute('fill'),
+                     rim: rims[i],
                      opacity: p.style.opacity,
                      selected: p.getAttribute('aria-selected') };
           });
@@ -115,11 +122,11 @@ const { check, fail, finish, instrumentFrontend, openPage, ok } = require('./lib
       'the ring has no slices'
     );
 
-    const fills = new Set(info.slices.map((slice) => slice.fill));
+    const rims = new Set(info.slices.map((slice) => slice.rim));
     check(
       'every format has its own colour',
-      fills.size === info.sliceCount,
-      `${fills.size} colours for ${info.sliceCount} slices`
+      rims.size === info.sliceCount,
+      `${rims.size} colours for ${info.sliceCount} slices`
     );
 
     const selected = info.slices.filter((slice) => slice.selected === 'true');
@@ -143,7 +150,7 @@ const { check, fail, finish, instrumentFrontend, openPage, ok } = require('./lib
     console.log('ring:', info.ringSize + 'px');
     console.log('file list height:', info.fileListHeight + 'px');
     info.slices.forEach((slice) => {
-      console.log(`   ${slice.label.padEnd(5)} fill=${slice.fill} opacity=${slice.opacity} selected=${slice.selected}`);
+      console.log(`   ${slice.label.padEnd(5)} rim=${slice.rim} opacity=${slice.opacity} selected=${slice.selected}`);
     });
   } finally {
     page.close();

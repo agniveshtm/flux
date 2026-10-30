@@ -881,6 +881,10 @@ video {
   margin-bottom: auto;
 }
 
+.mb-1 {
+  margin-bottom: 0.25rem;
+}
+
 .mb-2 {
   margin-bottom: 0.5rem;
 }
@@ -937,6 +941,10 @@ video {
   height: 4.5rem;
 }
 
+.h-2 {
+  height: 0.5rem;
+}
+
 .h-3\.5 {
   height: 0.875rem;
 }
@@ -955,10 +963,6 @@ video {
 
 .h-9 {
   height: 2.25rem;
-}
-
-.h-\[48px\] {
-  height: 48px;
 }
 
 .h-full {
@@ -987,6 +991,10 @@ video {
 
 .w-16 {
   width: 4rem;
+}
+
+.w-2 {
+  width: 0.5rem;
 }
 
 .w-3\.5 {
@@ -1019,10 +1027,6 @@ video {
 
 .w-80 {
   width: 20rem;
-}
-
-.w-\[48px\] {
-  width: 48px;
 }
 
 .w-auto {
@@ -1067,6 +1071,10 @@ video {
 
 .rotate-180 {
   --tw-rotate: 180deg;
+  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
+}
+
+.transform {
   transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 
@@ -1308,6 +1316,10 @@ video {
   line-height: 2.5rem;
 }
 
+.text-\[10px\] {
+  font-size: 10px;
+}
+
 .text-base {
   font-size: 1rem;
   line-height: 1.5;
@@ -1360,6 +1372,10 @@ video {
 
 .leading-none {
   line-height: 1;
+}
+
+.tracking-\[0\.2em\] {
+  letter-spacing: 0.2em;
 }
 
 .tracking-tight {
@@ -1439,14 +1455,43 @@ video {
   box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
 }
 
+.shadow-sm {
+  --tw-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --tw-shadow-colored: 0 1px 2px 0 var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
 .ring {
   --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
   --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(3px + var(--tw-ring-offset-width)) var(--tw-ring-color);
   box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
 }
 
+.ring-1 {
+  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(1px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
+}
+
+.ring-line {
+  --tw-ring-color: var(--color-border);
+}
+
+.invert {
+  --tw-invert: invert(100%);
+  filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
+}
+
 .filter {
   filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
+}
+
+.transition {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, -webkit-backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter, -webkit-backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
 }
 
 .transition-colors {
@@ -1620,16 +1665,177 @@ body {
    box-shadow cannot follow their shape - and a click gives the path focus
    without matching :focus-visible, leaving the browser's rectangular `auto`
    outline drawn around the path's bounding box. Stroke the path instead: it
-   traces the slice's own outer and inner arcs and its two radial edges. */
+   traces the slice's own outer and inner arcs and its two radial edges. The
+   outline is the text colour: it stays high-contrast against the well in
+   both themes, where an accent outline would vanish into the crimson rim. */
 
 .format-donut path:focus {
   outline: none;
-  stroke: var(--color-accent);
+  stroke: var(--color-text);
   stroke-width: 2;
 }
 
 .format-donut path:focus-visible {
   box-shadow: none;
+}
+
+/* The ring's slices are a well with a border, not a filled wedge: the well
+   is the theme's own background token, so it reads dark in dark mode and
+   light when the theme flips, and the same-colour round-join stroke softens
+   the wedge's corners. The crimson border is a separate inset path
+   (.format-donut-rim below), so a margin of the well shows between the
+   border and the slice's actual edge on every side. */
+
+.format-donut-slice {
+  fill: var(--color-bg);
+  stroke: var(--color-bg);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  transform: translate(0, 0);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 180ms ease-out, filter 180ms ease-out,
+    opacity 180ms ease-out;
+}
+
+/* The inset border itself: fill none (its colour arrives as the per-format
+   stroke attribute), stroked thin, and transformed in lockstep with its
+   well so the border never drifts off the slice it belongs to. */
+
+.format-donut-rim {
+  fill: none;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  transform: translate(0, 0);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 180ms ease-out, opacity 180ms ease-out;
+}
+
+/* The single-format ring draws its well as a wide stroke instead. */
+
+.format-donut-single {
+  fill: none;
+  stroke: var(--color-bg);
+}
+
+.format-donut-label {
+  fill: var(--color-text);
+  transform: translate(0, 0);
+  transition: transform 180ms ease-out;
+}
+
+/* The instrument dressing: a faint track fills the gaps between slices so
+   the ring reads as one dial, the ticks mark each boundary just outside
+   the well, and a hairline frames the hub. All static, all in the border
+   or accent tokens - the dressing never competes with the rims. */
+
+.format-donut-track {
+  fill: none;
+  stroke: var(--color-border);
+}
+
+.format-donut-ticks path {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+}
+
+.format-donut-hub {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 0.6;
+  stroke-opacity: 0.4;
+}
+
+/* The needle dot rides just outside the well at the marked slice's
+   mid-angle, rotated about the ring's centre so it sweeps from format to
+   format instead of jumping. The origin is given in user units rather
+   than as `center`: with a min-x/min-y viewBox, the view-box reference
+   box starts at 0,0, so `center` would land at 56,56 - six units off the
+   ring's true centre at 50,50. */
+
+.format-donut-needle {
+  transform-box: view-box;
+  transform-origin: 50px 50px;
+  transition: transform 240ms ease-out, opacity 200ms ease-out;
+}
+
+/* After a kind switch, the new ring settles in: a short fade and grow on
+   each slice, rim and label. */
+
+@keyframes format-donut-settle {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+.format-donut.is-switching .format-donut-slice,
+.format-donut.is-switching .format-donut-rim,
+.format-donut.is-switching .format-donut-label {
+  animation: format-donut-settle 220ms ease-out;
+}
+
+/* The depth model: the selected slice sits permanently raised a hairline
+   along its own radius (offset carried per slice as --lx/--ly, 0.45 of the
+   hover amount), and a hovered slice floats - full offset and a 3% grow
+   about its own centre, with the accent glow on the well. Well, rim and
+   label all ride the offsets, so a slice moves as one piece. Focus stays
+   on path:focus above, which outranks the well's stroke. Hover outranks
+   selected when both apply. */
+
+.format-donut-slice.is-selected,
+.format-donut-rim.is-selected,
+.format-donut-label.is-selected {
+  transform: translate(calc(var(--lx) * 0.45), calc(var(--ly) * 0.45));
+}
+
+.format-donut-slice.is-hovered,
+.format-donut-rim.is-hovered,
+.format-donut-label.is-hovered {
+  transform: translate(var(--lx), var(--ly));
+}
+
+.format-donut-slice.is-hovered {
+  filter: drop-shadow(0 1px 5px rgba(220, 20, 60, 0.5));
+  transform: translate(var(--lx), var(--ly)) scale(1.03);
+}
+
+.format-donut-rim.is-hovered {
+  transform: translate(var(--lx), var(--ly)) scale(1.03);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .format-donut-slice,
+  .format-donut-rim,
+  .format-donut-label {
+    transition: none;
+  }
+
+  .format-donut-needle {
+    transition: none;
+  }
+
+  .format-donut.is-switching .format-donut-slice,
+  .format-donut.is-switching .format-donut-rim,
+  .format-donut.is-switching .format-donut-label {
+    animation: none;
+  }
+
+  .format-donut-slice.is-selected,
+  .format-donut-rim.is-selected,
+  .format-donut-label.is-selected,
+  .format-donut-slice.is-hovered,
+  .format-donut-rim.is-hovered,
+  .format-donut-label.is-hovered {
+    transform: none;
+  }
+
+  .format-donut-slice.is-hovered {
+    filter: none;
+  }
 }
 
 /* The picker's popover. It is position: fixed (it has to escape the file
@@ -1903,12 +2109,20 @@ body {
   border-color: var(--color-accent);
 }
 
+.hover\:bg-accent-tint:hover {
+  background-color: var(--color-accent-tint);
+}
+
 .hover\:bg-surface-2:hover {
   background-color: var(--color-surface-2);
 }
 
 .hover\:text-accent:hover {
   color: var(--color-accent);
+}
+
+.hover\:ring-accent:hover {
+  --tw-ring-color: var(--color-accent);
 }
 
 .focus-visible\:ring-2:focus-visible {
@@ -1919,10 +2133,6 @@ body {
 
 .focus-visible\:ring-accent:focus-visible {
   --tw-ring-color: var(--color-accent);
-}
-
-.focus-visible\:ring-offset-2:focus-visible {
-  --tw-ring-offset-width: 2px;
 }
 
 .active\:scale-95:active {
