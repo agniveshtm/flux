@@ -21,8 +21,12 @@ const { check, finish, instrumentFrontend, openPage } = require('./lib');
       return {
         centre: svg.parentElement.querySelector('button').textContent.trim(),
         slices: document.querySelectorAll('.format-donut path[role="option"]').length,
-        ring: document.querySelectorAll('.format-donut circle').length,
-        caption: svg.parentElement.parentElement.querySelector('p').textContent.trim(),
+        // Only the empty-kind placeholder is a dashed circle; the track and
+        // hub hairline are solid dressing on a real ring.
+        placeholder: document.querySelectorAll(
+          '.format-donut circle[stroke-dasharray]').length,
+        caption: svg.parentElement.parentElement.querySelector(
+          '.format-donut-caption').textContent.trim(),
         labels: Array.prototype.map.call(
           document.querySelectorAll('.format-donut path[role="option"]'),
           function(p){ return p.getAttribute('aria-label'); }),
@@ -96,8 +100,8 @@ const { check, finish, instrumentFrontend, openPage } = require('./lib');
     check('the video ring shows GIF and MP4',
       video.labels.length === 2 && video.labels[0] === 'GIF' && video.labels[1] === 'MP4',
       `the video ring shows ${JSON.stringify(video.labels)}`);
-    check('the video ring draws slices, not a placeholder circle', video.ring === 0,
-      `${video.ring} circles`);
+    check('the video ring draws slices, not a placeholder circle', video.placeholder === 0,
+      `${video.placeholder} placeholder circles`);
     check('the video ring says so', video.caption === 'Video',
       `the caption reads "${video.caption}"`);
 
