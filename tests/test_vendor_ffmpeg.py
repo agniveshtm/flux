@@ -27,11 +27,15 @@ from PIL import Image
 
 from flux.services.ffmpeg import (
     AUDIO_OUTPUT_FORMATS,
+    AUDIO_OUTPUT_MUXERS,
     VIDEO_OUTPUT_FORMATS,
+    VIDEO_OUTPUT_MUXERS,
     audio_encoder_for,
+    audio_output_available,
     locate_ffmpeg,
     pick_encoder,
     probe_encoders,
+    probe_muxers,
     video_available,
     video_output_available,
 )
@@ -158,9 +162,15 @@ def test_the_vendored_build_includes_the_phase_2_2_encoders(
         assert video_output_available(target), (
             f"the vendored build cannot write {target} despite its codecs"
         )
+        assert VIDEO_OUTPUT_MUXERS[target] in probe_muxers(), (
+            f"the vendored build lost the {VIDEO_OUTPUT_MUXERS[target]} muxer"
+        )
     for target in AUDIO_OUTPUT_FORMATS:
-        assert audio_encoder_for(target) is not None, (
+        assert audio_output_available(target), (
             f"the vendored build cannot extract {target}"
+        )
+        assert AUDIO_OUTPUT_MUXERS[target] in probe_muxers(), (
+            f"the vendored build lost the {AUDIO_OUTPUT_MUXERS[target]} muxer"
         )
 
 
@@ -351,3 +361,31 @@ def test_real_video_input_gets_a_poster_frame_preview(real_clip: Path) -> None:
     assert prefix == "data:image/jpeg;base64", prefix
     frame = Image.open(io.BytesIO(base64.b64decode(payload)))
     assert frame.size[0] <= 64 and frame.size[1] <= 64, frame.size
+
+def test_real_portrait_video_preview_respects_both_dimensions(
+    real_ffmpeg: Path, tmp_path: Path
+) -> None:
+    """A tall clip must fit the edge box, not just the width.
+
+    The first filter capped width only, so 180x320 at maxEdge=100 became
+    100x178 and broke the bridge's longest-edge promise. Both dimensions are
+    now bounded.
+    """
+    portrait = tmp_path / "portrait.mp4"
+    proc = subprocess.run(
+        [
+            str(real_ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=180x320:rate=10",
+            "-t", "1.2", "-pix_fmt", "yuv420p", str(portrait),
+        ],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    result = FluxAPI().getFilePreview(str(portrait), {"maxEdge": 100})
+
+    assert "dataUrl" in result, result
+    _, _, payload = result["dataUrl"].partition(",")
+    frame = Image.open(io.BytesIO(base64.b64decode(payload)))
+    assert max(frame.size) <= 100, frame.size
+    assert frame.height > frame.width, frame.size

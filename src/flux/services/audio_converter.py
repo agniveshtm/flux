@@ -41,6 +41,7 @@ from flux.services.ffmpeg import (
     VIDEO_INPUT_FORMATS,
     audio_available,
     audio_encoder_for,
+    audio_output_available,
     locate_ffmpeg,
     run_ffmpeg,
 )
@@ -100,9 +101,7 @@ class FFmpegAudioConverter(BaseConverter):
     def supported_output_formats(self) -> list[str]:
         if not audio_available():
             return []
-        return [
-            fmt for fmt in OUTPUT_FORMATS if audio_encoder_for(fmt) is not None
-        ]
+        return [fmt for fmt in OUTPUT_FORMATS if audio_output_available(fmt)]
 
     def convert(
         self,

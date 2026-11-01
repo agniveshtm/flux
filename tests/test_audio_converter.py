@@ -35,6 +35,7 @@ from flux.services.ffmpeg import (
     VIDEO_INPUT_FORMATS,
     audio_available,
     audio_encoder_for,
+    audio_output_available,
 )
 
 # The fake's encoders listing, in the format ffmpeg -encoders prints.
@@ -51,6 +52,17 @@ _ENCODERS_NO_MP3 = (
 )
 _ENCODERS_NEITHER = "Encoders:\n A....D aac   AAC (Advanced Audio Coding)\n"
 
+_MUXERS_ALL = (
+    "Formats:\n"
+    "  E  avi              AVI (Audio Video Interleaved)\n"
+    "  E  matroska         Matroska\n"
+    "  E  mov              QuickTime / MOV\n"
+    "  E  mp4              MP4 (MPEG-4 Part 14)\n"
+    "  E  webm             WebM\n"
+    "  E  mp3              MP3 (MPEG audio layer 3)\n"
+    "  E  wav              WAV / WAVE (Waveform Audio)\n"
+)
+
 _FAKE_FFMPEG = '''\
 """Stand-in ffmpeg for the audio tests: same CLI surface, no codecs."""
 import os
@@ -66,6 +78,10 @@ if argv_file:
 
 if "-encoders" in args:
     sys.stdout.write(os.environ.get("FAKE_ENCODERS", ""))
+    sys.exit(0)
+
+if "-muxers" in args:
+    sys.stdout.write(os.environ.get("FAKE_MUXERS", ""))
     sys.exit(0)
 
 output = args[-1]
@@ -122,6 +138,7 @@ def fake_ffmpeg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(audio_converter, "locate_ffmpeg", lambda: launcher)
     monkeypatch.setattr(ffmpeg_module, "locate_ffmpeg", lambda: launcher)
     monkeypatch.setenv("FAKE_ENCODERS", _ENCODERS_AUDIO)
+    monkeypatch.setenv("FAKE_MUXERS", _MUXERS_ALL)
     ffmpeg_module.reset_probe_cache()
     return launcher
 
@@ -192,7 +209,7 @@ def test_audio_converter_declares_only_video_inputs_and_its_targets(
     converter = FFmpegAudioConverter()
     assert converter.kind == "audio"
     assert converter.supported_output_formats == [
-        fmt for fmt in AUDIO_OUTPUT_FORMATS if audio_encoder_for(fmt) is not None
+        fmt for fmt in AUDIO_OUTPUT_FORMATS if audio_output_available(fmt)
     ]
     # Only the video containers are readable. GIF and stills are absent, which
     # is what keeps MP3/WAV off every image row.
@@ -221,6 +238,7 @@ def test_audio_targets_are_gated_per_encoder(
 
     # WAV survives a build without libmp3lame; MP3 does not.
     monkeypatch.setenv("FAKE_ENCODERS", _ENCODERS_NO_MP3)
+    monkeypatch.setenv("FAKE_MUXERS", _MUXERS_ALL)
     ffmpeg_module.reset_probe_cache()
     assert FFmpegAudioConverter().supported_output_formats == ["wav"]
     assert FFmpegAudioConverter().supported_input_formats == list(VIDEO_INPUT_FORMATS)
@@ -235,6 +253,38 @@ def test_audio_targets_are_gated_per_encoder(
     assert FFmpegAudioConverter().supported_output_formats == []
     assert FFmpegAudioConverter().supported_input_formats == []
     assert not audio_available()
+
+
+def test_audio_targets_are_gated_on_the_muxer_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing MP3 muxer hides MP3 even when libmp3lame is present."""
+    script = tmp_path / "fake_ffmpeg.py"
+    script.write_text(_FAKE_FFMPEG, encoding="utf-8")
+    if sys.platform == "win32":
+        launcher = tmp_path / "ffmpeg.cmd"
+        launcher.write_text(
+            f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8"
+        )
+    else:
+        launcher = tmp_path / "ffmpeg"
+        launcher.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8"
+        )
+        launcher.chmod(0o755)
+    monkeypatch.setattr(ffmpeg_module, "locate_ffmpeg", lambda: launcher)
+
+    muxers_without_mp3 = _MUXERS_ALL.replace(
+        "  E  mp3              MP3 (MPEG audio layer 3)\n", ""
+    )
+    monkeypatch.setenv("FAKE_ENCODERS", _ENCODERS_AUDIO)
+    monkeypatch.setenv("FAKE_MUXERS", muxers_without_mp3)
+    ffmpeg_module.reset_probe_cache()
+
+    assert audio_encoder_for("mp3") == "libmp3lame"
+    assert audio_output_available("mp3") is False
+    assert audio_output_available("wav") is True
+    assert FFmpegAudioConverter().supported_output_formats == ["wav"]
 
 
 def test_convert_refuses_targets_it_cannot_write(

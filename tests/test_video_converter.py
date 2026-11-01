@@ -77,6 +77,19 @@ _ENCODERS_NO_OPUS = (
 )
 _ENCODERS_NEITHER = "Encoders:\n A....D aac   AAC (Advanced Audio Coding)\n"
 
+# The fake's muxer listing, in the format ffmpeg -muxers prints. A real build
+# names the MKV muxer "matroska"; the rest match their extension.
+_MUXERS_ALL = (
+    "Formats:\n"
+    "  E  avi              AVI (Audio Video Interleaved)\n"
+    "  E  matroska         Matroska\n"
+    "  E  mov              QuickTime / MOV\n"
+    "  E  mp4              MP4 (MPEG-4 Part 14)\n"
+    "  E  webm             WebM\n"
+    "  E  mp3              MP3 (MPEG audio layer 3)\n"
+    "  E  wav              WAV / WAVE (Waveform Audio)\n"
+)
+
 _FAKE_FFMPEG = '''\
 """Stand-in ffmpeg for tests: same CLI surface, no codecs. See the module
 docstring of tests/test_video_converter.py for the mode table."""
@@ -95,6 +108,10 @@ if argv_file:
 
 if "-encoders" in args:
     sys.stdout.write(os.environ.get("FAKE_ENCODERS", ""))
+    sys.exit(0)
+
+if "-muxers" in args:
+    sys.stdout.write(os.environ.get("FAKE_MUXERS", ""))
     sys.exit(0)
 
 output = args[-1]
@@ -207,6 +224,7 @@ def fake_ffmpeg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(video_converter, "locate_ffmpeg", lambda: launcher)
     monkeypatch.setattr(ffmpeg_module, "locate_ffmpeg", lambda: launcher)
     monkeypatch.setenv("FAKE_ENCODERS", _ENCODERS_BOTH)
+    monkeypatch.setenv("FAKE_MUXERS", _MUXERS_ALL)
     ffmpeg_module.reset_probe_cache()
     return launcher
 
@@ -415,6 +433,7 @@ def test_pick_encoder_follows_the_preference_table(
     # Both encoders present: the table's first entry wins, which is the
     # current libx264-first contract of Phase 2.1.
     monkeypatch.setenv("FAKE_ENCODERS", _ENCODERS_BOTH)
+    monkeypatch.setenv("FAKE_MUXERS", _MUXERS_ALL)
     ffmpeg_module.reset_probe_cache()
     assert ffmpeg_module.pick_encoder() == "libx264"
     assert ffmpeg_module.has_encoder("libx264")
@@ -463,6 +482,7 @@ def test_video_outputs_are_gated_per_container(
     monkeypatch.setattr(ffmpeg_module, "locate_ffmpeg", lambda: launcher)
 
     monkeypatch.setenv("FAKE_ENCODERS", _ENCODERS_NO_OPUS)
+    monkeypatch.setenv("FAKE_MUXERS", _MUXERS_ALL)
     ffmpeg_module.reset_probe_cache()
     # libx264 is present, so every AAC container survives; the Opus pairings
     # do not. "gif" is not an output here - the image converter writes it.
@@ -476,6 +496,42 @@ def test_video_outputs_are_gated_per_container(
     ffmpeg_module.reset_probe_cache()
     assert FFmpegVideoConverter().supported_output_formats == []
     assert not ffmpeg_module.video_available()
+
+
+def test_video_outputs_are_gated_on_the_muxer_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Encoders alone are not enough: the container's muxer must exist.
+
+    A custom FLUX_FFMPEG build can compile libx264/libopus and still leave out
+    the WebM muxer. The target must then disappear, or the matrix promises a
+    file ffmpeg refuses to write.
+    """
+    script = tmp_path / "fake_ffmpeg.py"
+    script.write_text(_FAKE_FFMPEG, encoding="utf-8")
+    launcher = tmp_path / ("ffmpeg.cmd" if sys.platform == "win32" else "ffmpeg")
+    if sys.platform == "win32":
+        launcher.write_text(
+            f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8"
+        )
+    else:
+        launcher.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8"
+        )
+        launcher.chmod(0o755)
+    monkeypatch.setattr(ffmpeg_module, "locate_ffmpeg", lambda: launcher)
+
+    muxers_without_webm = _MUXERS_ALL.replace(
+        "  E  webm             WebM\n", ""
+    )
+    monkeypatch.setenv("FAKE_ENCODERS", _ENCODERS_BOTH)
+    monkeypatch.setenv("FAKE_MUXERS", muxers_without_webm)
+    ffmpeg_module.reset_probe_cache()
+
+    assert ffmpeg_module.video_output_available("webm") is False
+    assert ffmpeg_module.video_output_available("mkv") is True  # matroska
+    assert "webm" not in FFmpegVideoConverter().supported_output_formats
+    assert "mkv" in FFmpegVideoConverter().supported_output_formats
 
 
 # --- the encode loop --------------------------------------------------------

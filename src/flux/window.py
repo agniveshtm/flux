@@ -493,7 +493,19 @@ class FluxAPI:
                 {"path": str(file_path)},
             )
 
-        edge = max(1, int(max_edge or self._PREVIEW_THUMB_MAX_EDGE))
+        try:
+            requested = int(max_edge)
+        except (TypeError, ValueError):
+            requested = 0
+        if requested <= 0:
+            # The image path reads maxEdge <= 0 as "as stored". A video has no
+            # stored still to return, so the honest equivalent is the row
+            # thumbnail default rather than a 1-pixel frame.
+            requested = self._PREVIEW_THUMB_MAX_EDGE
+        # The modal's 2048 is the ceiling: it keeps one frame far below
+        # _MAX_PREVIEW_BYTES (and keeps a caller-supplied huge maxEdge from
+        # making ffmpeg allocate an enormous frame before the cap can run).
+        edge = min(requested, self._PREVIEW_FULL_MAX_EDGE)
         data = b""
         last_error = "Could not read a frame from the video."
         for seek in ("1", "0"):
@@ -506,11 +518,17 @@ class FluxAPI:
                 # black/title first frame; 0s is the fallback for short clips.
                 "-ss", seek,
                 "-i", str(file_path),
-                # One frame, no audio, scaled inside the requested box. -2
-                # keeps the height even so the JPEG encoder is happy.
+                # One frame, no audio, fitted inside an edge x edge box with
+                # the aspect ratio preserved. Both dimensions are capped, so a
+                # portrait clip cannot derive a height past `edge`; min() on
+                # each side keeps a small clip from being upscaled.
                 "-frames:v", "1",
                 "-an",
-                "-vf", f"scale='min({edge},iw)':-2",
+                "-vf",
+                (
+                    f"scale=w='min(iw,{edge})':h='min(ih,{edge})'"
+                    ":force_original_aspect_ratio=decrease"
+                ),
                 "-q:v", "3",
                 "-f", "image2pipe",
                 "-vcodec", "mjpeg",

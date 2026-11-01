@@ -73,6 +73,24 @@ AUDIO_OUTPUT_ENCODERS: dict[str, tuple[str, ...]] = {
 
 AUDIO_OUTPUT_FORMATS: tuple[str, ...] = tuple(AUDIO_OUTPUT_ENCODERS)
 
+# The muxer each output extension uses (`ffmpeg -muxers` names it). Encoder
+# availability alone is not enough: a custom FLUX_FFMPEG build can carry the
+# codecs but be compiled without a muxer, and advertising that target would
+# promise a conversion ffmpeg cannot finish. MKV's muxer is called
+# "matroska"; the rest match their extension.
+VIDEO_OUTPUT_MUXERS: dict[str, str] = {
+    "mp4": "mp4",
+    "webm": "webm",
+    "mkv": "matroska",
+    "mov": "mov",
+    "avi": "avi",
+}
+
+AUDIO_OUTPUT_MUXERS: dict[str, str] = {
+    "mp3": "mp3",
+    "wav": "wav",
+}
+
 # Container suffixes ffmpeg decodes. These are converter *input* formats -
 # the video converter transcodes them, and the image converter pulls a still
 # frame out of them. Audio extraction reads the same containers, so these are
@@ -82,12 +100,17 @@ VIDEO_INPUT_FORMATS = (
     "wmv", "flv", "mpg", "mpeg", "mts", "m2ts", "ts", "3gp", "ogv",
 )
 
-# Cached probe result: None = not yet probed, frozenset = encoders found.
+# Cached probe results: None = not yet probed, frozenset = names found.
 _ENCODERS_CACHE: frozenset[str] | None = None
+_MUXERS_CACHE: frozenset[str] | None = None
 
 # ffmpeg -encoders output format: "<VAS> <name> <description>"
 # e.g. " V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC"
 _ENCODER_LINE = re.compile(r"^\s*[VAS][.\w]*\s+(\S+)", re.MULTILINE)
+
+# ffmpeg -muxers output format: "<flags> <name> <description>"
+# e.g. "  E  mp4              MP4 (MPEG-4 Part 14)"
+_MUXER_LINE = re.compile(r"^\s*[D. ]E[d. ]\s+(\S+)", re.MULTILINE)
 
 
 def locate_ffmpeg() -> Path | None:
@@ -166,6 +189,53 @@ def has_encoder(name: str) -> bool:
     return name in probe_encoders()
 
 
+def probe_muxers(ffmpeg: Path | None = None) -> frozenset[str]:
+    """Return the muxer names the ffmpeg build provides, cached after first call.
+
+    Mirrors probe_encoders: an empty set means ffmpeg is missing or the probe
+    failed. Gating treats that as "unknown" rather than "nothing muxes", so a
+    failed probe does not hide every format on a build whose encoders were
+    already confirmed (see _has_muxer).
+    """
+    global _MUXERS_CACHE
+    if _MUXERS_CACHE is not None:
+        return _MUXERS_CACHE
+
+    if ffmpeg is None:
+        ffmpeg = locate_ffmpeg()
+    if ffmpeg is None:
+        _MUXERS_CACHE = frozenset()
+        return _MUXERS_CACHE
+
+    try:
+        result = subprocess.run(
+            [str(ffmpeg), "-hide_banner", "-muxers"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        muxers = frozenset(
+            match.group(1) for match in _MUXER_LINE.finditer(result.stdout)
+        )
+    except (OSError, subprocess.SubprocessError):
+        muxers = frozenset()
+
+    _MUXERS_CACHE = muxers
+    return muxers
+
+
+def _has_muxer(name: str) -> bool:
+    """Whether a muxer is usable, tolerating a failed/empty probe.
+
+    A real build reports its muxers, so a missing one hides its target. An
+    empty set means the probe itself failed or ffmpeg is absent; in that case
+    the encoder gate is already authoritative, and failing closed here would
+    turn a transient probe problem into every conversion target vanishing.
+    """
+    muxers = probe_muxers()
+    return not muxers or name in muxers
+
+
 def _pick_encoder(encoders: tuple[str, ...]) -> str | None:
     """The first encoder of a preference table that the build provides."""
     available = probe_encoders()
@@ -205,9 +275,10 @@ def audio_encoder_for(target_format: str) -> str | None:
 def video_output_available(target_format: str) -> bool:
     """Whether one video container can be written by this build.
 
-    Both halves matter: the container needs a video encoder *and* the audio
-    encoder its muxer is paired with. Advertising WebM on a build without
-    libopus would promise a file ffmpeg cannot finish.
+    All three parts matter: the container needs a video encoder, the audio
+    encoder its muxer is paired with, and the muxer itself. Advertising WebM
+    on a build without libopus - or without the webm muxer - would promise a
+    file ffmpeg cannot finish.
     """
     key = str(target_format).strip().lower()
     if key not in VIDEO_OUTPUT_ENCODERS:
@@ -215,7 +286,16 @@ def video_output_available(target_format: str) -> bool:
     return (
         video_encoder_for(key) is not None
         and _pick_encoder(VIDEO_AUDIO_ENCODERS[key]) is not None
+        and _has_muxer(VIDEO_OUTPUT_MUXERS[key])
     )
+
+
+def audio_output_available(target_format: str) -> bool:
+    """Whether one audio-extraction target can be written by this build."""
+    key = str(target_format).strip().lower()
+    if key not in AUDIO_OUTPUT_ENCODERS:
+        return False
+    return audio_encoder_for(key) is not None and _has_muxer(AUDIO_OUTPUT_MUXERS[key])
 
 
 def video_available() -> bool:
@@ -225,18 +305,19 @@ def video_available() -> bool:
 
 def audio_available() -> bool:
     """Whether audio extraction is possible on this system at all."""
-    return any(audio_encoder_for(target) is not None for target in AUDIO_OUTPUT_FORMATS)
+    return any(audio_output_available(target) for target in AUDIO_OUTPUT_FORMATS)
 
 
 def reset_probe_cache() -> None:
-    """Forget the cached -encoders result so the next probe re-runs it.
+    """Forget the cached -encoders/-muxers results so the next probe re-runs.
 
-    The probe spawns a subprocess, so it is done once and remembered; tests
-    that swap the binary out from under it call this instead of reaching
-    into the cache variable themselves.
+    Both probes spawn a subprocess, so they are done once and remembered;
+    tests that swap the binary out from under them call this instead of
+    reaching into the cache variables themselves.
     """
-    global _ENCODERS_CACHE
+    global _ENCODERS_CACHE, _MUXERS_CACHE
     _ENCODERS_CACHE = None
+    _MUXERS_CACHE = None
 
 
 # --- running one ffmpeg process ---------------------------------------------

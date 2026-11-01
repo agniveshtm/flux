@@ -112,9 +112,38 @@ def test_video_preview_returns_a_poster_frame_data_url(
     cmd = calls[0]
     assert cmd[0] == "ffmpeg"
     assert cmd[cmd.index("-ss") + 1] == "1", "the poster frame should seek past the title card"
-    assert "scale='min(128,iw)':-2" in cmd, cmd
+    scale = cmd[cmd.index("-vf") + 1]
+    assert "min(iw,128)" in scale and "min(ih,128)" in scale, scale
+    assert "force_original_aspect_ratio=decrease" in scale, scale
     assert "-frames:v" in cmd and cmd[cmd.index("-frames:v") + 1] == "1"
     assert cmd[-1] == "pipe:1"
+
+
+def test_video_preview_clamps_edges_before_running_ffmpeg(
+    tmp_path: Path, api: FluxAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # maxEdge is bridge input, so an unbounded or nonsensical value must not
+    # reach ffmpeg. <=0 follows the image path's "no size chosen" case (a
+    # video has no stored still, so it becomes the thumbnail default), and
+    # anything larger is held to the modal's 2048 ceiling.
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"not a real video")
+    scales: list[str] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        scales.append(cmd[cmd.index("-vf") + 1])
+        return _completed(stdout=_FAKE_JPEG)
+
+    monkeypatch.setattr(window_module, "locate_ffmpeg", lambda: Path("ffmpeg"))
+    monkeypatch.setattr(window_module.subprocess, "run", fake_run)
+
+    api.getFilePreview(str(source), {"maxEdge": 0})
+    api.getFilePreview(str(source), {"maxEdge": -40})
+    api.getFilePreview(str(source), {"maxEdge": 100_000})
+
+    assert "min(iw,512)" in scales[0], scales[0]
+    assert "min(iw,512)" in scales[1], scales[1]
+    assert "min(iw,2048)" in scales[2], scales[2]
 
 
 def test_video_preview_falls_back_to_the_first_frame(

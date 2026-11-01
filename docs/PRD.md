@@ -229,7 +229,8 @@ Deliberate limits:
       build without ffmpeg stays image-only
 - [x] All encodes go through the shared `run_ffmpeg()` pump (progress and the
       three-rung cancel chain unchanged)
-- [x] The quality slider maps per encoder (x264 0–51, VP9 0–63, LAME 0–9)
+- [x] The quality slider maps per encoder (x264 CRF 18–28, VP9 CRF 10–40,
+      LAME `-q:a` 0–9; defaults 23 / 32 / 2)
 - [x] The matrix, kinds and donut rings still come from the registry; the
       frontend gains the new outputs and an audio ring with no format table
 - [x] `getSupportedFormats()` stays self-consistent (kind, ring and matrix

@@ -73,11 +73,19 @@ re-encodes as JPEG.
 
 Video inputs are previewed as a poster frame: the same call runs the bundled
 ffmpeg with a fast seek one second in (`-ss` before `-i`), falls back to 00:00
-for clips shorter than that, and pipes one MJPEG frame back (scaled inside
-`maxEdge`, no audio). The result is still a `data:image/jpeg` URL, so rows and
-the modal use the existing `<img>` path with no player and no full file on the
-bridge. A build without ffmpeg returns `PREVIEW_UNAVAILABLE`; the video row
-cannot exist there anyway, because the converter registers no formats.
+for clips shorter than that, and pipes one MJPEG frame back (no audio). The
+result is still a `data:image/jpeg` URL, so rows and the modal use the existing
+`<img>` path with no player and no full file on the bridge. A build without
+ffmpeg returns `PREVIEW_UNAVAILABLE`; the video row cannot exist there anyway,
+because the converter registers no formats.
+
+The frame is scaled with `scale=min(iw,edge):min(ih,edge):force_original_aspect_ratio=decrease`,
+so **both** dimensions are capped and a portrait clip can no longer derive a
+tall edge past `maxEdge`; `min()` also keeps a small clip from being upscaled.
+`maxEdge` is clamped before ffmpeg starts: `<= 0` means the thumbnail default
+(512px - the image path's "as stored" has no video equivalent), and anything
+larger is held to the modal ceiling of 2048px, so a bridge caller cannot make
+ffmpeg allocate an arbitrary frame.
 
 ### Dialog results
 
@@ -226,9 +234,17 @@ class BaseConverter(ABC):
   MP3/WAV from the same containers. Codec tables live in
   `services/ffmpeg.py` — `VIDEO_OUTPUT_ENCODERS` (per-container video
   preference), `VIDEO_AUDIO_ENCODERS` (AAC for MP4/MOV/AVI, Opus for
-  WebM/MKV), `AUDIO_OUTPUT_ENCODERS` (libmp3lame / pcm_s16le) — and gating is
-  `video_output_available()` (video encoder **and** its paired audio encoder)
-  plus `audio_encoder_for()`. `converter.py::convert_files` is the shared
+  WebM/MKV), `AUDIO_OUTPUT_ENCODERS` (libmp3lame / pcm_s16le), and the
+  `VIDEO_OUTPUT_MUXERS`/`AUDIO_OUTPUT_MUXERS` tables (MKV's muxer is
+  `matroska`; the rest match their extension). Gating is
+  `video_output_available()` (video encoder **and** its paired audio encoder
+  **and** the muxer, from a second `-muxers` probe cached like `-encoders`)
+  plus `audio_output_available()`. Encoders alone are not enough: a custom
+  `FLUX_FFMPEG` build can compile libx264/libopus and leave out the WebM
+  muxer, and the matrix must not promise a file ffmpeg refuses to write. A
+  failed muxer probe is treated as "unknown", not "nothing muxes" — the
+  encoder gate is still authoritative there, so one bad probe cannot blank
+  every target. `converter.py::convert_files` is the shared
   batch loop (validation, atomic name claim, cleanup, cancel) and
   `clamp_quality` the shared 0–100 clamp; both ffmpeg converters call them, so
   a failure leaves exactly the same nothing behind whichever encoder ran.
