@@ -192,3 +192,38 @@
 - **Alternatives:** The video converter also registering `gif` output (two writers for one output — registry target selection and `window.py`, which routes by output format alone, would both need new disambiguation); moving GIF entirely to ffmpeg (loses Pillow's still-gif path, per-frame duration/disposal handling and dither control); a frontend "gif is also video" special case (violates the backend-single-source-of-truth rule that replaced `TARGETS_BY_INPUT`).
 - **Why:** GIF genuinely is both kinds — still → gif is an image conversion, clip → gif and gif → mp4 are video ones — but *routing* must stay unambiguous, so kind membership is registry data the UI renders rather than a rule it invents. Everything inherits the existing capability gate: no ffmpeg → no video → GIF, GIF remains image-only.
 - **Consequence:** The matrix needs no exception beyond the registry's derived gif row (gif + mp4 alongside every image target); the donut's video ring has two slices (GIF, MP4); `check-donut.js` asserts them. Image → mp4 stays the one deliberately excluded pair.
+
+## 2026-11-01 — Audio extraction is its own converter and donut kind
+
+- **Decision:** `FFmpegAudioConverter` (`audio_converter.py`, `kind = "audio"`) writes MP3/WAV and reads only `VIDEO_INPUT_FORMATS`. It is registered beside the video converter; MP3/WAV form a third donut ring. The batch loop and quality clamp move to `converter.py::convert_files` / `clamp_quality`, shared by both ffmpeg converters.
+- **Alternatives:** add MP3/WAV as extra outputs on `FFmpegVideoConverter` (one converter, but the registry would group an audio file under the video kind and the donut would have no honest audio ring); put audio-only inputs in the image converter (wrong kind, and stills would have to special-case "no audio"); duplicate the batch loop per converter.
+- **Why:** the registry derives kind and matrix from the converter that writes a format. A separate converter makes "audio targets only from video inputs" fall out of the existing pairing rule instead of needing an exception, and gives the donut a real audio ring. Sharing the loop keeps failure/cancel cleanup identical across encoders.
+- **Consequence:** a still never offers MP3/WAV (and GIF does not either — it has no audio stream); `getSupportedFormats()` gains `audio` in `kinds` and `rings`; `TARGET_PREFERENCE` includes the video and audio outputs so a clip still preselects a video conversion.
+
+## 2026-11-01 — Capability gating is per container, and checks the audio pairing
+
+- **Decision:** codec tables live in `services/ffmpeg.py`: `VIDEO_OUTPUT_ENCODERS` (per-container video preference), `VIDEO_AUDIO_ENCODERS` (AAC for MP4/MOV/AVI, Opus for WebM/MKV), `AUDIO_OUTPUT_ENCODERS` (libmp3lame / pcm_s16le). `video_output_available(target)` requires **both** the video encoder and the container's paired audio encoder; `audio_encoder_for(target)` gates each extraction target. The command builders read the same tables.
+- **Alternatives:** gate video as a family on `pick_encoder()` (the Phase 2.1 behaviour); check only the video encoder and let ffmpeg fail on a missing Opus; keep a second copy of the codec choice in the command builder.
+- **Why:** a build may carry libx264 without libopus. Advertising WebM/MKV there promises a muxer the build cannot finish, while MP4/MOV/AVI still work. One table read by both the gate and the argv means the codec that is checked is the codec that is written.
+- **Consequence:** `supported_output_formats` is filtered per target, and the input list follows it (`supported_input_formats` is empty when nothing can be written). `_ENCODERS_NO_OPUS` and `_ENCODERS_VP9_ONLY` are pinned in `test_video_converter.py`; the vendored build's `libvpx-vp9`/`libopus`/`libmp3lame`/`pcm_s16le` are pinned in `test_vendor_ffmpeg.py`.
+
+## 2026-11-01 — AVI reserves 64 KiB of index space, not the research table's 16M
+
+- **Decision:** `container_args("avi")` passes `-reserve_index_space 65536` (`AVI_INDEX_RESERVE_BYTES`). The research report's table said `16M`.
+- **Alternatives:** keep `16M` exactly as written; drop the flag entirely; reserve a different fixed size.
+- **Why:** measured against the vendored ffmpeg 9.0.2, `16M` writes a ~16 MiB JUNK chunk inside each AVI `strl`. That pushes the second stream past the demuxer's header window: the output keeps only the video stream (audio silently disappears), and `ffmpeg -v error … -f null -` prints `Something went wrong during header parsing, tag JUNK has size 15999992`. The OpenDML superindex the reserve exists for costs roughly 16 bytes per GiB of file, so 64 KiB covers a ~4 TiB AVI and stays far inside the parser's limit. A 1.2 s clip at 64 KiB decodes cleanly with both streams.
+- **Consequence:** the real-ffmpeg suite asserts every video container carries both streams and decodes with empty stderr, so a return to `16M` fails the AVI case. The deviation is called out in PRD Phase 2.2 and ARCHITECTURE.
+
+## 2026-11-01 — Gating also checks the muxer, not just the encoders
+
+- **Decision:** `VIDEO_OUTPUT_MUXERS` / `AUDIO_OUTPUT_MUXERS` map each target to its `ffmpeg -muxers` name (MKV's is `matroska`; the rest match their extension). `video_output_available()` now requires video encoder **and** paired audio encoder **and** muxer; `audio_output_available()` requires the encoder **and** muxer. The probe is a second subprocess, cached like `-encoders` and cleared by `reset_probe_cache()`.
+- **Alternatives:** trust the encoder probe alone; parse the combined `-formats` listing instead of `-muxers`; fail closed when the muxer probe returns empty.
+- **Why:** a custom `FLUX_FFMPEG` build (the documented escape hatch) can compile libx264/libopus and still lack a muxer. Encoder-only gating then advertises a target whose conversion must fail at the last step. A failed/empty probe, though, is not evidence that no muxer exists — failing closed there would blank the whole matrix on a transient probe problem, so `_has_muxer` treats empty as "unknown" and lets the encoder gate decide.
+- **Consequence:** `test_video_converter.py` / `test_audio_converter.py` fakes answer `-muxers` too, and new tests remove the WebM/MP3 muxer while keeping their codecs to prove the target disappears. `test_vendor_ffmpeg.py` pins the real build's muxers alongside its encoders.
+
+## 2026-11-01 — Video previews clamp `maxEdge` and cap both edges
+
+- **Decision:** `_video_preview` resolves `maxEdge` before ffmpeg runs: non-numeric/`<= 0` becomes the 512px thumbnail default, and anything above 2048px is clamped to the modal ceiling. The filter is `scale=min(iw,edge):min(ih,edge):force_original_aspect_ratio=decrease`, so both dimensions are bounded and small clips are not upscaled.
+- **Alternatives:** inherit the image path's "`maxEdge <= 0` means as stored" (a video has no stored still, and a 1px frame is useless); cap width only with height `-2` (a portrait clip derives a height past the requested edge); rely on the post-read `_MAX_PREVIEW_BYTES` backstop (ffmpeg has already allocated the frame by then).
+- **Why:** `maxEdge` is bridge input, so it must be bounded before it becomes filter text and allocation size — clamping at the source fixes the root cause instead of trimming the result afterwards. Capping both edges is what makes "longest edge at most `maxEdge`" true for portrait sources.
+- **Consequence:** `tests/test_preview.py` asserts the clamp for `0`, negative and `100_000`, and `test_vendor_ffmpeg.py` decodes a real 180x320 clip at `maxEdge=100` and checks `max(size) <= 100` with height still greater than width.

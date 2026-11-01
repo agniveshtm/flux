@@ -2,7 +2,7 @@
 
 ## Overview
 
-Flux is a desktop file converter application for general consumers. It provides a simple, offline-first interface for converting between common image formats (JPG, PNG, WebP, ICO, AVIF, GIF and HEIC/HEIF), and — since Phase 2.1 — for converting video into MP4, still frames and animated GIF. Conversion itself runs entirely offline — the only network traffic is the optional in-app update check — and the app is packaged as a native Windows installer.
+Flux is a desktop file converter application for general consumers. It provides a simple, offline-first interface for converting between common image formats (JPG, PNG, WebP, ICO, AVIF, GIF and HEIC/HEIF), and — since Phase 2.1 — for converting video into MP4, still frames and animated GIF. Phase 2.2 widens the video matrix to WebM, MKV, MOV and AVI, and adds MP3/WAV audio extraction from clips. Conversion itself runs entirely offline — the only network traffic is the optional in-app update check — and the app is packaged as a native Windows installer.
 
 **Tech Stack**: Python + pywebview (desktop shell), Vue 3 + Tailwind CSS (frontend, in `src/flux/frontend`), Pillow + pillow-heif (image conversion), a vendored ffmpeg sidecar binary (video conversion, `vendor/ffmpeg.exe`), PyInstaller + Inno Setup (packaging).
 
@@ -10,7 +10,7 @@ Flux is a desktop file converter application for general consumers. It provides 
 
 - Provide a clean, CloudConvert-inspired UI (crimson-red + black theme with light/dark toggle) for file conversion
 - Support all seven image formats in both directions (Phase 1.1 + 1.3): JPG, PNG, WebP, ICO, AVIF, GIF, HEIC
-- Convert video: video containers to MP4, video to still frames, and clips to animated GIF (Phase 2.1, capability-gated on ffmpeg)
+- Convert video: video containers to MP4, WebM, MKV, MOV and AVI, video to still frames, clips to animated GIF, and clips to MP3/WAV audio (Phase 2.1 + 2.2, capability-gated on ffmpeg)
 - Work fully offline — no CDN dependencies, Vue vendored locally, Tailwind compiled via standalone CLI
 - Distribute via a single Windows installer (Inno Setup) built with PyInstaller
 - Keep conversion operations off the UI thread with progress reporting
@@ -87,8 +87,8 @@ reads it.
 
 Deliberate limits:
 
-- MP4 is the only video **output** in Phase 2.1 (WebM/MKV/MOV etc. are
-  Phase 2.2+).
+- MP4 was the only video **output** in Phase 2.1; Phase 2.2 adds WebM,
+  MKV, MOV, AVI and MP3/WAV extraction (see below).
 - Image → MP4 is not offered: a one-frame clip is a worse still image, and
   nothing sensible plays it as a video.
 - Everything video is capability-gated: without a capable ffmpeg build the
@@ -104,11 +104,52 @@ Deliberate limits:
   the 105 MB binary collides with the <100 MB installer success criterion.
 
 
+## Phase 2.2 — Video containers and audio extraction
+
+Widens the video matrix from MP4 alone to five containers, and adds MP3/WAV
+audio extraction from clips. The registry still derives every row from the
+converters: a video row offers every video target except itself, every audio
+target, and every still target; a still row never sees a video or audio
+target. Outputs are capability-gated **per container and per encoder**, so a
+build without `libopus` hides WebM/MKV while keeping MP4/MOV/AVI.
+
+| Conversion | Notes |
+|--------|-------|
+| Video → MP4 | H.264 first (`libx264`, falling back to `libvpx-vp9`), AAC, `+faststart`. |
+| Video → WebM | VP9 (`libvpx-vp9`, `-b:v 0 -deadline good -cpu-used 4`), Opus. |
+| Video → MKV | Same codec preference as MP4, Opus. |
+| Video → MOV | Same as MP4 but deliberately **without** `+faststart`. |
+| Video → AVI | Same codec preference as MP4, AAC, `-reserve_index_space`. |
+| Video → MP3 | `-vn -c:a libmp3lame -q:a {0..9} -write_xing 0 -id3v2_version 0`. |
+| Video → WAV | `-vn -c:a pcm_s16le` (uncompressed; no quality mapping). |
+
+The quality slider stays a single 0–100 "quality" control and is mapped per
+encoder: x264 CRF 18–28, VP9 CRF 10–40, libmp3lame `-q:a` 0–9. The MP3 default
+is LAME's high-quality VBR tier (2), not the middle of the slider.
+
+Deliberate limits:
+
+- Audio extraction reads only the video containers. A still has no audio
+  stream, so MP3/WAV never appear on an image row (GIF included).
+- A container is offered only when **both** halves are available: its video
+  encoder *and* the audio codec its muxer is paired with. Advertising WebM
+  without `libopus` would promise a file ffmpeg cannot finish.
+- MOV and AVI are desktop deliverables: they are dead ends for browsers, so
+  the future PWA must not advertise them as web-playable.
+- WAV inherits the 4 GiB RIFF ceiling (RF64 is not enabled).
+- The AVI index reserve is 64 KiB per stream, not the research table's 16M.
+  On ffmpeg 9.0.2 a 16 MiB reserve sits inside each AVI `strl` and pushes the
+  second stream past the demuxer's header window: the audio stream silently
+  disappears and `-v error` reports a JUNK-tag parsing notice. The OpenDML
+  superindex costs ~16 bytes/GiB, so 64 KiB covers a 4 TiB file and decodes
+  cleanly (DECISIONS 2026-11-01).
+- Everything remains capability-gated: a build without ffmpeg is image-only,
+  and the whole suite still runs with no binary at all.
+
 ## Non-Goals
 
-- **Video outputs beyond MP4 (WebM, MKV, MOV, AVI) and audio extraction** —
-  Phase 2.2+/not in scope yet; MP4 is the only video target for now
-  (video *inputs* were un-deferred in Phase 2.1, 2026-10-24)
+- **HEVC/H.265 and AV1 outputs** — Phase 2.3+, not in scope yet
+- **Audio formats beyond MP3/WAV** (FLAC, OGG/Opus, M4A) — not in scope yet
 - Cloud/online conversion features — app must work fully offline
 - macOS/Linux installers in v1.0 — Windows only initially
 - Batch folder processing — single/multiple file selection only
@@ -176,3 +217,29 @@ Deliberate limits:
 - [ ] Release packaging: installer ships `ffmpeg.exe` next to `flux.exe`
       (open — see the packaging note in Phase 2.1; also affects the <100 MB
       installer criterion)
+
+## Phase 2.2 acceptance criteria
+
+- [x] WebM, MKV, MOV and AVI convert end to end; each output decodes cleanly
+      (`ffmpeg -v error -i <out> -f null -`) and carries both streams
+- [x] MP3 and WAV extraction produce audio-only files (`-vn`), with the MP3
+      VBR flags and WAV's uncompressed PCM
+- [x] Stills never offer MP3/WAV; only video containers do (GIF included)
+- [x] Every output is capability-gated per encoder and per audio pairing; a
+      build without ffmpeg stays image-only
+- [x] All encodes go through the shared `run_ffmpeg()` pump (progress and the
+      three-rung cancel chain unchanged)
+- [x] The quality slider maps per encoder (x264 CRF 18–28, VP9 CRF 10–40,
+      LAME `-q:a` 0–9; defaults 23 / 32 / 2)
+- [x] The matrix, kinds and donut rings still come from the registry; the
+      frontend gains the new outputs and an audio ring with no format table
+- [x] `getSupportedFormats()` stays self-consistent (kind, ring and matrix
+      all name the same gated outputs)
+- [x] Tests cover the encoder tables, per-output gating, and at least one
+      real encode per output
+- [x] The vendored build ships `libvpx-vp9`, `libopus`, `libmp3lame` and
+      `pcm_s16le` — pinned alongside `test_the_vendored_build_includes_libx264`
+- [x] `uv run pytest tests/ -q`, `node scripts/check-frontend.js` and all
+      four UI checks are green
+- [ ] Release packaging still does not ship `ffmpeg.exe` (carried over from
+      Phase 2.1; needs the size decision)

@@ -27,25 +27,90 @@ from typing import Callable
 # encoder actually runs is a build property, not a frontend one, so swapping
 # the order (or dropping an entry) changes nothing the UI has to know.
 #
-# libx264 is preferred while the maintainer's Phase 2.1 is MP4/H.264; the
+# libx264 is preferred while the maintainer's MP4 target is H.264; the
 # report's patent-safe alternative is libvpx-vp9, which the BtbN LGPL build
 # carries (that build has no libx264 at all, so it selects vp9 by absence).
 MP4_ENCODERS = ("libx264", "libvpx-vp9")
 
+# Per-output video encoder preferences. MKV/MOV/AVI reuse the MP4 table -
+# they are the same H.264-first transcode in a different container - while
+# WebM only accepts VP9. A target is offered only when one of its encoders
+# *and* its audio encoder are present in the -encoders probe, so a build
+# missing libopus simply does not advertise WebM/MKV rather than writing a
+# file ffmpeg refuses to finish.
+VIDEO_OUTPUT_ENCODERS: dict[str, tuple[str, ...]] = {
+    "mp4": MP4_ENCODERS,
+    "webm": ("libvpx-vp9",),
+    "mkv": MP4_ENCODERS,
+    "mov": MP4_ENCODERS,
+    "avi": MP4_ENCODERS,
+}
+
+# The order the UI (and tests) list video outputs in: the researched matrix's
+# order, not alphabetically sorted registry output.
+VIDEO_OUTPUT_FORMATS: tuple[str, ...] = tuple(VIDEO_OUTPUT_ENCODERS)
+
+# Audio codec paired with each video container. WebM/MKV carry Opus (the
+# royalty-free pairing the report recommends); MP4/MOV/AVI keep AAC, the
+# universally decodable one. Both are gated: the container is not offered
+# unless the build has this encoder too.
+VIDEO_AUDIO_ENCODERS: dict[str, tuple[str, ...]] = {
+    "mp4": ("aac",),
+    "webm": ("libopus",),
+    "mkv": ("libopus",),
+    "mov": ("aac",),
+    "avi": ("aac",),
+}
+
+# Audio-extraction targets and their encoders, in preference order. WAV is
+# uncompressed PCM (lossless, so the quality slider does not apply); MP3 is
+# libmp3lame. Each target is offered only when its encoder is actually in
+# the build.
+AUDIO_OUTPUT_ENCODERS: dict[str, tuple[str, ...]] = {
+    "mp3": ("libmp3lame",),
+    "wav": ("pcm_s16le",),
+}
+
+AUDIO_OUTPUT_FORMATS: tuple[str, ...] = tuple(AUDIO_OUTPUT_ENCODERS)
+
+# The muxer each output extension uses (`ffmpeg -muxers` names it). Encoder
+# availability alone is not enough: a custom FLUX_FFMPEG build can carry the
+# codecs but be compiled without a muxer, and advertising that target would
+# promise a conversion ffmpeg cannot finish. MKV's muxer is called
+# "matroska"; the rest match their extension.
+VIDEO_OUTPUT_MUXERS: dict[str, str] = {
+    "mp4": "mp4",
+    "webm": "webm",
+    "mkv": "matroska",
+    "mov": "mov",
+    "avi": "avi",
+}
+
+AUDIO_OUTPUT_MUXERS: dict[str, str] = {
+    "mp3": "mp3",
+    "wav": "wav",
+}
+
 # Container suffixes ffmpeg decodes. These are converter *input* formats -
 # the video converter transcodes them, and the image converter pulls a still
-# frame out of them - while "mp4" below is the one *output* Phase 2.1 ships.
+# frame out of them. Audio extraction reads the same containers, so these are
+# also the audio converter's only inputs (a still has no audio stream).
 VIDEO_INPUT_FORMATS = (
     "mp4", "mov", "mkv", "avi", "webm", "m4v",
     "wmv", "flv", "mpg", "mpeg", "mts", "m2ts", "ts", "3gp", "ogv",
 )
 
-# Cached probe result: None = not yet probed, frozenset = encoders found.
+# Cached probe results: None = not yet probed, frozenset = names found.
 _ENCODERS_CACHE: frozenset[str] | None = None
+_MUXERS_CACHE: frozenset[str] | None = None
 
 # ffmpeg -encoders output format: "<VAS> <name> <description>"
 # e.g. " V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC"
 _ENCODER_LINE = re.compile(r"^\s*[VAS][.\w]*\s+(\S+)", re.MULTILINE)
+
+# ffmpeg -muxers output format: "<flags> <name> <description>"
+# e.g. "  E  mp4              MP4 (MPEG-4 Part 14)"
+_MUXER_LINE = re.compile(r"^\s*[D. ]E[d. ]\s+(\S+)", re.MULTILINE)
 
 
 def locate_ffmpeg() -> Path | None:
@@ -124,34 +189,135 @@ def has_encoder(name: str) -> bool:
     return name in probe_encoders()
 
 
-def pick_encoder() -> str | None:
-    """The MP4 encoder this build will use, or None if it has none.
+def probe_muxers(ffmpeg: Path | None = None) -> frozenset[str]:
+    """Return the muxer names the ffmpeg build provides, cached after first call.
 
-    One call answers both questions the converter asks - *whether* video
-    conversion exists and *how* the command line is built - off the single
-    cached -encoders probe, so every capability check in the app agrees.
+    Mirrors probe_encoders: an empty set means ffmpeg is missing or the probe
+    failed. Gating treats that as "unknown" rather than "nothing muxes", so a
+    failed probe does not hide every format on a build whose encoders were
+    already confirmed (see _has_muxer).
     """
-    encoders = probe_encoders()
-    for name in MP4_ENCODERS:
-        if name in encoders:
+    global _MUXERS_CACHE
+    if _MUXERS_CACHE is not None:
+        return _MUXERS_CACHE
+
+    if ffmpeg is None:
+        ffmpeg = locate_ffmpeg()
+    if ffmpeg is None:
+        _MUXERS_CACHE = frozenset()
+        return _MUXERS_CACHE
+
+    try:
+        result = subprocess.run(
+            [str(ffmpeg), "-hide_banner", "-muxers"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        muxers = frozenset(
+            match.group(1) for match in _MUXER_LINE.finditer(result.stdout)
+        )
+    except (OSError, subprocess.SubprocessError):
+        muxers = frozenset()
+
+    _MUXERS_CACHE = muxers
+    return muxers
+
+
+def _has_muxer(name: str) -> bool:
+    """Whether a muxer is usable, tolerating a failed/empty probe.
+
+    A real build reports its muxers, so a missing one hides its target. An
+    empty set means the probe itself failed or ffmpeg is absent; in that case
+    the encoder gate is already authoritative, and failing closed here would
+    turn a transient probe problem into every conversion target vanishing.
+    """
+    muxers = probe_muxers()
+    return not muxers or name in muxers
+
+
+def _pick_encoder(encoders: tuple[str, ...]) -> str | None:
+    """The first encoder of a preference table that the build provides."""
+    available = probe_encoders()
+    for name in encoders:
+        if name in available:
             return name
     return None
 
 
+def pick_encoder() -> str | None:
+    """The MP4 encoder this build will use, or None if it has none.
+
+    Kept as the MP4-shaped default for the image converter's capability gate
+    and for callers that predate per-target selection. New code should ask
+    for the encoder of the target it is about to write.
+    """
+    return _pick_encoder(MP4_ENCODERS)
+
+
+def video_encoder_for(target_format: str) -> str | None:
+    """The encoder a specific video output will use, or None.
+
+    A build may carry VP9 without libx264 (the LGPL case); it may also carry
+    neither. Answering per target is what lets each container advertise or
+    vanish independently instead of the whole video family hinging on MP4.
+    """
+    table = VIDEO_OUTPUT_ENCODERS.get(str(target_format).strip().lower())
+    return _pick_encoder(table) if table else None
+
+
+def audio_encoder_for(target_format: str) -> str | None:
+    """The encoder a specific audio-extraction target will use, or None."""
+    table = AUDIO_OUTPUT_ENCODERS.get(str(target_format).strip().lower())
+    return _pick_encoder(table) if table else None
+
+
+def video_output_available(target_format: str) -> bool:
+    """Whether one video container can be written by this build.
+
+    All three parts matter: the container needs a video encoder, the audio
+    encoder its muxer is paired with, and the muxer itself. Advertising WebM
+    on a build without libopus - or without the webm muxer - would promise a
+    file ffmpeg cannot finish.
+    """
+    key = str(target_format).strip().lower()
+    if key not in VIDEO_OUTPUT_ENCODERS:
+        return False
+    return (
+        video_encoder_for(key) is not None
+        and _pick_encoder(VIDEO_AUDIO_ENCODERS[key]) is not None
+        and _has_muxer(VIDEO_OUTPUT_MUXERS[key])
+    )
+
+
+def audio_output_available(target_format: str) -> bool:
+    """Whether one audio-extraction target can be written by this build."""
+    key = str(target_format).strip().lower()
+    if key not in AUDIO_OUTPUT_ENCODERS:
+        return False
+    return audio_encoder_for(key) is not None and _has_muxer(AUDIO_OUTPUT_MUXERS[key])
+
+
 def video_available() -> bool:
     """Whether video conversion is possible on this system at all."""
-    return pick_encoder() is not None
+    return any(video_encoder_for(target) is not None for target in VIDEO_OUTPUT_FORMATS)
+
+
+def audio_available() -> bool:
+    """Whether audio extraction is possible on this system at all."""
+    return any(audio_output_available(target) for target in AUDIO_OUTPUT_FORMATS)
 
 
 def reset_probe_cache() -> None:
-    """Forget the cached -encoders result so the next probe re-runs it.
+    """Forget the cached -encoders/-muxers results so the next probe re-runs.
 
-    The probe spawns a subprocess, so it is done once and remembered; tests
-    that swap the binary out from under it call this instead of reaching
-    into the cache variable themselves.
+    Both probes spawn a subprocess, so they are done once and remembered;
+    tests that swap the binary out from under them call this instead of
+    reaching into the cache variables themselves.
     """
-    global _ENCODERS_CACHE
+    global _ENCODERS_CACHE, _MUXERS_CACHE
     _ENCODERS_CACHE = None
+    _MUXERS_CACHE = None
 
 
 # --- running one ffmpeg process ---------------------------------------------

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -23,12 +24,14 @@ from flux.converter import (
     normalize_format,
 )
 from flux.services import (
+    FFmpegAudioConverter,
     FFmpegVideoConverter,
     PillowImageConverter,
     UpdateError,
     UpdateInfo,
     Updater,
 )
+from flux.services.ffmpeg import VIDEO_INPUT_FORMATS, locate_ffmpeg
 
 
 @dataclass
@@ -99,9 +102,10 @@ class FluxAPI:
     def _default_registry() -> ConverterRegistry:
         registry = ConverterRegistry()
         registry.register(PillowImageConverter())
-        # A no-op without a capable ffmpeg build: the converter declares no
+        # No-ops without a capable ffmpeg build: the converters declare no
         # formats, so registration maps nothing and the UI stays image-only.
         registry.register(FFmpegVideoConverter())
+        registry.register(FFmpegAudioConverter())
         return registry
 
     def attach_window(self, window: Any) -> None:
@@ -435,11 +439,9 @@ class FluxAPI:
     # stays even on a build without libavif: the map is static, and the path
     # is unreachable for a format the UI never admits as a row.
     #
-    # Video suffixes are deliberately absent although the converters read
-    # them: this bridge decodes *images* (getFilePreview below returns "Only
-    # image files can be previewed." otherwise), so a video row falls back to
-    # the placeholder glyph in FileRow rather than pretending to a thumbnail
-    # it cannot produce.
+    # Video suffixes are not in this map: they are not stills, so handing one
+    # to <img> would only render a broken image. getFilePreview routes them to
+    # _video_preview instead, which asks the bundled ffmpeg for one frame.
     _PREVIEW_MIME_TYPES = {
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
@@ -452,10 +454,116 @@ class FluxAPI:
         ".heif": "image/heif",
     }
 
+    # Video inputs get a poster frame instead of a decoded still. This is the
+    # same allowlist as the converters' video inputs, so the bridge can only
+    # run ffmpeg against a container Flux would actually accept.
+    _PREVIEW_VIDEO_SUFFIXES = frozenset(f".{fmt}" for fmt in VIDEO_INPUT_FORMATS)
+
+    # A corrupt or very large video must not wedge a row's preview request:
+    # ffmpeg gets one fast seek plus a fallback to the first frame inside this
+    # budget.
+    _VIDEO_PREVIEW_TIMEOUT = 20
+
     @staticmethod
     def _mime_type_for(suffix: str) -> str | None:
         """The previewable MIME type for a file suffix, or None if not an image."""
         return FluxAPI._PREVIEW_MIME_TYPES.get(str(suffix).lower())
+
+    @staticmethod
+    def _is_video_preview(suffix: str) -> bool:
+        """Whether a suffix is a video container the preview bridge can read."""
+        return str(suffix).lower() in FluxAPI._PREVIEW_VIDEO_SUFFIXES
+
+    def _video_preview(self, file_path: Path, max_edge: int) -> dict[str, Any]:
+        """Extract one frame from a video and return it as a JPEG data URL.
+
+        Every video row used to fall back to the placeholder glyph because the
+        bridge only decoded images. A poster frame is the useful thumbnail
+        here: it goes through the same <img> path as a still, stays tiny on
+        the bridge, and needs no player. The frame comes from one second in
+        (a representative moment rather than a title card or a black first
+        frame), falling back to 00:00 for clips shorter than that. Seeking
+        before -i keeps it a fast seek rather than a decode from the start.
+        """
+        ffmpeg = locate_ffmpeg()
+        if ffmpeg is None:
+            return self._error(
+                "PREVIEW_UNAVAILABLE",
+                "Video previews need the bundled ffmpeg build.",
+                {"path": str(file_path)},
+            )
+
+        try:
+            requested = int(max_edge)
+        except (TypeError, ValueError):
+            requested = 0
+        if requested <= 0:
+            # The image path reads maxEdge <= 0 as "as stored". A video has no
+            # stored still to return, so the honest equivalent is the row
+            # thumbnail default rather than a 1-pixel frame.
+            requested = self._PREVIEW_THUMB_MAX_EDGE
+        # The modal's 2048 is the ceiling: it keeps one frame far below
+        # _MAX_PREVIEW_BYTES (and keeps a caller-supplied huge maxEdge from
+        # making ffmpeg allocate an enormous frame before the cap can run).
+        edge = min(requested, self._PREVIEW_FULL_MAX_EDGE)
+        data = b""
+        last_error = "Could not read a frame from the video."
+        for seek in ("1", "0"):
+            cmd = [
+                str(ffmpeg),
+                "-hide_banner",
+                "-nostats",
+                "-loglevel", "error",
+                # -ss before -i is a fast input seek. 1s avoids the usual
+                # black/title first frame; 0s is the fallback for short clips.
+                "-ss", seek,
+                "-i", str(file_path),
+                # One frame, no audio, fitted inside an edge x edge box with
+                # the aspect ratio preserved. Both dimensions are capped, so a
+                # portrait clip cannot derive a height past `edge`; min() on
+                # each side keeps a small clip from being upscaled.
+                "-frames:v", "1",
+                "-an",
+                "-vf",
+                (
+                    f"scale=w='min(iw,{edge})':h='min(ih,{edge})'"
+                    ":force_original_aspect_ratio=decrease"
+                ),
+                "-q:v", "3",
+                "-f", "image2pipe",
+                "-vcodec", "mjpeg",
+                "pipe:1",
+            ]
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    timeout=self._VIDEO_PREVIEW_TIMEOUT,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return self._error(
+                    "READ_ERROR",
+                    str(exc) or exc.__class__.__name__,
+                    {"path": str(file_path)},
+                )
+            if completed.returncode == 0 and completed.stdout:
+                data = completed.stdout
+                break
+            stderr = (completed.stderr or b"").decode("utf-8", "replace").strip()
+            if stderr:
+                last_error = stderr.splitlines()[-1]
+
+        if not data:
+            return self._error("READ_ERROR", last_error, {"path": str(file_path)})
+        if len(data) > self._MAX_PREVIEW_BYTES:
+            return self._error(
+                "VALIDATION_ERROR",
+                "Video preview is too large.",
+                {"path": str(file_path)},
+            )
+
+        b64 = base64.b64encode(data).decode("ascii")
+        return {"dataUrl": f"data:image/jpeg;base64,{b64}"}
 
     def getFilePreview(
         self,
@@ -475,11 +583,15 @@ class FluxAPI:
 
         mime_type = self._mime_type_for(file_path.suffix)
 
-        # Only known image types: the page must not be able to read arbitrary
-        # local files (configs, documents, ...) through the preview bridge.
-        if mime_type is None:
+        # Only known image and video types: the page must not be able to read
+        # arbitrary local files (configs, documents, ...) through the preview
+        # bridge. A video is decoded by ffmpeg into one frame, so its suffix
+        # only needs to be one the converters accept.
+        if mime_type is None and not self._is_video_preview(file_path.suffix):
             return self._error(
-                "VALIDATION_ERROR", "Only image files can be previewed.", {"path": path}
+                "VALIDATION_ERROR",
+                "Only image and video files can be previewed.",
+                {"path": path},
             )
 
         max_edge = self._PREVIEW_THUMB_MAX_EDGE
@@ -489,8 +601,10 @@ class FluxAPI:
             except (TypeError, ValueError):
                 max_edge = self._PREVIEW_THUMB_MAX_EDGE
 
+        if mime_type is None:
+            return self._video_preview(file_path, max_edge)
+
         try:
-            import base64
             from io import BytesIO
 
             from PIL import Image, ImageOps
