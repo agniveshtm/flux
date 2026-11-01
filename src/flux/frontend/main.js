@@ -34,7 +34,11 @@ Object.entries(components).forEach(([name, component]) => {
 // worth showing; a target not listed here ignores a quality option.
 // MP4 is quality-driven too - its encoder maps the slider onto CRF (see
 // x264_crf/vp9_crf in flux/services/video_converter.py).
-const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif', 'heic', 'mp4']);
+const LOSSY_TARGETS = new Set([
+  'jpg', 'webp', 'avif', 'heic',
+  'mp4', 'webm', 'mkv', 'mov', 'avi',
+  'mp3',
+]);
 
 // The order a dropped file's target is preselected from, most compatible first.
 //
@@ -47,12 +51,19 @@ const LOSSY_TARGETS = new Set(['jpg', 'webp', 'avif', 'heic', 'mp4']);
 // picks rather than something they are given.
 //
 // 'mp4' leads because the matrix is input-aware (see rowTargets inside setup):
-// a video row's targets are MP4 plus the still formats a frame can be pulled
-// to, and MP4 is the whole point of dropping a video - while image rows never
-// list MP4, so putting it first costs those rows nothing and they still land
-// on 'jpg'. Ties are resolved by this order alone, never by the backend's
-// alphabetical one.
-const TARGET_PREFERENCE = ['mp4', 'jpg', 'png', 'webp', 'ico', 'gif', 'heic', 'avif'];
+// a video row's targets are the video outputs, the audio extractions and the
+// still formats a frame can be pulled to, and MP4 is the whole point of
+// dropping a video - while image rows never list it, so putting it first
+// costs those rows nothing and they still land on 'jpg'. The rest of the
+// video outputs follow in the researched matrix's order, so an .mp4 input
+// (`webm` is then its first preference) still lands on a video conversion
+// rather than on a frame extraction or an MP3. Ties are resolved by this
+// order alone, never by the backend's alphabetical one.
+const TARGET_PREFERENCE = [
+  'mp4', 'webm', 'mkv', 'mov', 'avi',
+  'mp3', 'wav',
+  'jpg', 'png', 'webp', 'ico', 'gif', 'heic', 'avif',
+];
 
 // Which target to preselect for an input extension: the first preference the
 // matrix actually offers, never the input format itself. Falls back to the

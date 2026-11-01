@@ -15,6 +15,7 @@ flowchart LR
         Conv["Converter Interface\n(converter.py)"]
         ImgConv["PillowImageConverter\n(image_converter.py)"]
         VidConv["FFmpegVideoConverter\n(video_converter.py)"]
+        AudConv["FFmpegAudioConverter\n(audio_converter.py)"]
         FFmpegSvc["ffmpeg service\n(services/ffmpeg.py)"]
         FS["Filesystem\n(OS)"]
     end
@@ -26,13 +27,16 @@ flowchart LR
     API -- "delegates to" --> Conv
     Conv -- "uses" --> ImgConv
     Conv -- "uses" --> VidConv
+    Conv -- "uses" --> AudConv
     ImgConv -- "video→stills, video→GIF" --> FFmpegSvc
     VidConv -- "builds argv; shares the pump" --> FFmpegSvc
+    AudConv -- "builds argv; shares the pump" --> FFmpegSvc
     FFmpegSvc -- "argv + pipes: progress, cancel" --> FFmpeg
     ImgConv -- "reads/writes" --> FS
     FFmpeg -- "reads/writes" --> FS
     ImgConv -- "progress callbacks" --> API
     VidConv -- "progress callbacks" --> API
+    AudConv -- "progress callbacks" --> API
     API -- "emits progress events" --> Bridge
     Bridge -- "updates UI" --> FE
 ```
@@ -44,11 +48,11 @@ flowchart LR
 | `convert` | `{ files: { name, size, type, path }[], targetFormat: string, options?: { outputDir: string, quality?: number, dither?: boolean, icoSizes?: number[] } }` | `{ jobId: string }` | `VALIDATION_ERROR`, `UNSUPPORTED_FORMAT` |
 | `getProgress` | `{ jobId: string }` | `{ status: 'pending'\|'running'\|'complete'\|'error', progress: 0-100, outputPaths?: string[], outputs?: { input: string, output: string }[], error?: string }` | `NOT_FOUND` |
 | `cancel` | `{ jobId: string }` | `{ cancelled: boolean }` | `NOT_FOUND`, `ALREADY_COMPLETE` |
-| `getSupportedFormats` | — | `{ input: string[], output: string[], kinds: Record<format, 'image'\|'video'>, targets: Record<input, format[]>, rings: { image: format[], video: format[] } }` — the single source of truth for the UI's conversion matrix *and* the donut's ring grouping (GIF appears in both rings) | — |
+| `getSupportedFormats` | — | `{ input: string[], output: string[], kinds: Record<format, 'image'\|'video'\|'audio'>, targets: Record<input, format[]>, rings: { image: format[], video: format[], audio: format[] } }` — the single source of truth for the UI's conversion matrix *and* the donut's ring grouping (GIF appears in both image and video; MP3/WAV form the audio ring) | — |
 | `pickFiles` | `{ multiple?: boolean }` | `{ paths: string[] }` | `CANCELLED` |
 | `pickOutputDir` | — | `{ path: string }` | `CANCELLED` |
 | `openOutputDir` | `{ path: string }` | `{ opened: boolean }` | `VALIDATION_ERROR`, `OPEN_ERROR` |
-| `getFilePreview` | `{ path: string, maxEdge?: number }` | `{ dataUrl: string }` | `VALIDATION_ERROR` |
+| `getFilePreview` | `{ path: string, maxEdge?: number }` | `{ dataUrl: string }` | `VALIDATION_ERROR`, `READ_ERROR`, `PREVIEW_UNAVAILABLE` |
 | `checkForUpdate` | — | `{ available, currentVersion, latestVersion, notes, publishedAt, assetName, assetSize }` | `NETWORK_ERROR`, `NO_RELEASES`, `BAD_RESPONSE` |
 | `downloadUpdate` | — | `{ started: boolean }` | `NO_UPDATE` |
 | `installUpdate` | — | `{ installing: boolean }` | `NOT_DOWNLOADED`, `UNSUPPORTED_PLATFORM`, `INSTALL_ERROR` |
@@ -66,6 +70,14 @@ every row made peak memory scale with batch size while the extra pixels were
 never displayed. `maxEdge <= 0` returns the stored bytes, still subject to the
 `_MAX_PREVIEW_BYTES` cap. Transparent images stay PNG, everything else
 re-encodes as JPEG.
+
+Video inputs are previewed as a poster frame: the same call runs the bundled
+ffmpeg with a fast seek one second in (`-ss` before `-i`), falls back to 00:00
+for clips shorter than that, and pipes one MJPEG frame back (scaled inside
+`maxEdge`, no audio). The result is still a `data:image/jpeg` URL, so rows and
+the modal use the existing `<img>` path with no player and no full file on the
+bridge. A build without ffmpeg returns `PREVIEW_UNAVAILABLE`; the video row
+cannot exist there anyway, because the converter registers no formats.
 
 ### Dialog results
 
@@ -152,7 +164,7 @@ output after a failure onto the wrong row. `ConversionResult.outputs` carries
 `{ input, output }[]`, and the frontend matches on the input path. Rows with no
 matching output are the ones that failed and are shown as such.
 
-## Converter Interface (Phase 1 images + Phase 2.1 video)
+## Converter Interface (Phase 1 images + Phase 2 video/audio)
 
 ```python
 # src/flux/converter.py
@@ -204,15 +216,35 @@ class BaseConverter(ABC):
   and `.heif` are accepted as inputs (same container); `heic` is the single
   canonical output, following the `jpeg`/`jpg` precedent.
 - **Phase 2.1**: `FFmpegVideoConverter` (`video_converter.py`) implements the
-  same interface, writing MP4 only and reading the video containers **plus
-  GIF**. All ffmpeg process machinery — binary location, the `-encoders`
-  capability probe, progress parsing from `out_time`/`Duration`, and the
-  three-rung cancel chain — lives once in `services/ffmpeg.py::run_ffmpeg`;
-  the video converter builds command lines and the image converter reuses the
-  same pump for video→GIF. Gated on `video_available()` end to end: without a
-  capable build the converter registers nothing and the matrix stays
-  image-only. `MP4_ENCODERS` preference is libx264 first (DECISIONS
-  2026-10-24).
+  same interface, reading the video containers **plus GIF**. All ffmpeg
+  process machinery — binary location, the `-encoders` capability probe,
+  progress parsing from `out_time`/`Duration`, and the three-rung cancel
+  chain — lives once in `services/ffmpeg.py::run_ffmpeg`; the image converter
+  reuses the same pump for video→GIF.
+- **Phase 2.2**: the video converter now writes MP4, WebM, MKV, MOV and AVI,
+  and `FFmpegAudioConverter` (`audio_converter.py`, kind `audio`) extracts
+  MP3/WAV from the same containers. Codec tables live in
+  `services/ffmpeg.py` — `VIDEO_OUTPUT_ENCODERS` (per-container video
+  preference), `VIDEO_AUDIO_ENCODERS` (AAC for MP4/MOV/AVI, Opus for
+  WebM/MKV), `AUDIO_OUTPUT_ENCODERS` (libmp3lame / pcm_s16le) — and gating is
+  `video_output_available()` (video encoder **and** its paired audio encoder)
+  plus `audio_encoder_for()`. `converter.py::convert_files` is the shared
+  batch loop (validation, atomic name claim, cleanup, cancel) and
+  `clamp_quality` the shared 0–100 clamp; both ffmpeg converters call them, so
+  a failure leaves exactly the same nothing behind whichever encoder ran.
+  The quality slider maps per encoder: x264 CRF 18–28, VP9 CRF 10–40,
+  libmp3lame `-q:a` 0–9. A build with no capable binary registers neither
+  converter, so the matrix stays image-only.
+- **Audio only from video**: `FFmpegAudioConverter` reads `VIDEO_INPUT_FORMATS`
+  and nothing else, so the registry's pairing rule keeps MP3/WAV off every
+  still row (GIF included) without a special case. The converter's kind puts
+  MP3/WAV in their own donut ring.
+- **AVI index reserve**: `container_args` passes
+  `-reserve_index_space 65536`, not the research table's 16M. At 16 MiB the
+  padding inside each AVI `strl` pushes the second stream past the demuxer's
+  header window, so the audio stream is dropped and `-v error` reports a
+  JUNK-tag notice. The OpenDML superindex costs ~16 bytes/GiB, so 64 KiB is
+  ample and decodes cleanly (DECISIONS 2026-11-01).
 - **GIF dual membership**: GIF is written by the image converter — stills
   through Pillow, clips through ffmpeg's palette chain — and the video
   converter merely *reads* it. `also_video_outputs` declares that a format
@@ -242,7 +274,8 @@ The app's runtime dependencies are deliberately minimal (Architecture decision 3
 produces the frozen exe and is never imported by the running app.
 
 **Sidecar (not a Python dependency)**: `vendor/ffmpeg.exe` — gyan.dev
-essentials 9.0.2, GPLv3, ~105 MB, `libx264` included (DECISIONS 2026-10-24).
+essentials 9.0.2, GPLv3, ~105 MB, with `libx264`, `libvpx-vp9`, `libopus`,
+`libmp3lame` and `pcm_s16le` (DECISIONS 2026-10-24 and 2026-11-01).
 `locate_ffmpeg()` resolves it beside the frozen executable first (the Inno
 Setup deployment path), then `vendor/` in a source checkout, then PATH as a
 dev convenience. It is never linked: invocation is argv + pipes, which keeps
@@ -275,7 +308,8 @@ flux/
 │   ├── services/
 │   │   ├── ffmpeg.py          # locate/probe/gate + shared run_ffmpeg pump
 │   │   ├── image_converter.py  # PillowImageConverter (+ video→stills/GIF)
-│   │   ├── video_converter.py  # FFmpegVideoConverter (MP4 out, gif in)
+│   │   ├── video_converter.py  # FFmpegVideoConverter (MP4/WebM/MKV/MOV/AVI)
+│   │   ├── audio_converter.py  # FFmpegAudioConverter (MP3/WAV from clips)
 │   │   └── updater.py         # GitHub release check + installer download
 │   ├── assets/                 # favicons, logos
 │       └── frontend/               # Vue 3 + Tailwind (vendored)
@@ -292,7 +326,7 @@ flux/
 │   └── ui/                       # headless-browser UI checks (no npm dependencies)
 │       ├── lib.js                # browser discovery + CDP driver + instrumented copy
 │       ├── check-layout.js       # equal wings, centred button/ring, no sideways scroll
-│       ├── check-donut.js        # slice pick, kind toggle, keyboard activation
+│       ├── check-donut.js        # slice pick, image/video/audio ring cycle, keyboard activation
 │       ├── check-picker.js       # row picker's popover: open, pick, Escape, focus
 │       ├── check-app.js          # the shipped frontend mounts clean, over file://
 │       └── measure.js            # prints the rendered geometry

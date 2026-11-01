@@ -4,8 +4,8 @@
  *   node scripts/ui/check-donut.js
  *
  * The donut is the app's only bulk format picker, so its behaviour is worth
- * pinning: a slice picks its format, the centre toggles between the image
- * and the video ring, and a slice can be reached and activated from the
+ * pinning: a slice picks its format, the centre cycles through the image,
+ * video and audio rings, and a slice can be reached and activated from the
  * keyboard alone.
  */
 'use strict';
@@ -85,7 +85,7 @@ const { check, finish, instrumentFrontend, openPage } = require('./lib');
     check('the rows follow the selected slice', picked.rowTarget === 'ico',
       `the row targets "${picked.rowTarget}"`);
 
-    // Toggle to the video ring and back.
+    // Cycle to the video ring.
     await page.evaluate(
       "document.querySelector('.format-donut').parentElement.querySelector('button').click()"
     );
@@ -93,24 +93,41 @@ const { check, finish, instrumentFrontend, openPage } = require('./lib');
     const video = await page.evaluate(state);
     check('the centre toggles to the video ring', video.centre === 'VID',
       `the centre reads "${video.centre}"`);
-    // The video ring carries GIF as well as MP4 - gif -> mp4 is a video
-    // conversion, and a video -> gif still (or full clip) is a video
-    // conversion too - so the ring is a real two-slice ring now, not the
-    // single-circle placeholder it was while MP4 was the only output.
-    check('the video ring shows GIF and MP4',
-      video.labels.length === 2 && video.labels[0] === 'GIF' && video.labels[1] === 'MP4',
+    // The video ring carries every backend video output plus GIF - gif ->
+    // mp4 is a video conversion, and a video -> gif clip is a video
+    // conversion too. The ring is no longer the single-circle placeholder it
+    // was while MP4 was the only output.
+    check('the video ring shows every video target',
+      JSON.stringify(video.labels) === JSON.stringify(['AVI', 'GIF', 'MKV', 'MOV', 'MP4', 'WEBM']),
       `the video ring shows ${JSON.stringify(video.labels)}`);
     check('the video ring draws slices, not a placeholder circle', video.placeholder === 0,
       `${video.placeholder} placeholder circles`);
     check('the video ring says so', video.caption === 'Video',
       `the caption reads "${video.caption}"`);
 
+    // Then the audio ring (MP3/WAV extraction).
+    await page.evaluate(
+      "document.querySelector('.format-donut').parentElement.querySelector('button').click()"
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const audio = await page.evaluate(state);
+    check('the centre cycles to the audio ring', audio.centre === 'AUD',
+      `the centre reads "${audio.centre}"`);
+    check('the audio ring shows MP3 and WAV',
+      JSON.stringify(audio.labels) === JSON.stringify(['MP3', 'WAV']),
+      `the audio ring shows ${JSON.stringify(audio.labels)}`);
+    check('the audio ring draws slices, not a placeholder circle', audio.placeholder === 0,
+      `${audio.placeholder} placeholder circles`);
+    check('the audio ring says so', audio.caption === 'Audio',
+      `the caption reads "${audio.caption}"`);
+
+    // The third click wraps back to the image ring.
     await page.evaluate(
       "document.querySelector('.format-donut').parentElement.querySelector('button').click()"
     );
     await new Promise((resolve) => setTimeout(resolve, 300));
     const back = await page.evaluate(state);
-    check('the centre toggles back to the image ring', back.centre === 'IMG',
+    check('the centre cycles back to the image ring', back.centre === 'IMG',
       `the centre reads "${back.centre}"`);
     check('the image slices come back', back.slices === initial.slices,
       `${back.slices} slices, expected ${initial.slices}`);

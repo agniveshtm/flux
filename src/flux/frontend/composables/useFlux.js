@@ -83,7 +83,10 @@ const mockSupportedFormats = {
   input: ['jpg', 'jpeg', 'png', 'webp', 'ico', 'gif', 'avif', 'heic', 'heif',
     'mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'wmv', 'flv',
     'mpg', 'mpeg', 'mts', 'm2ts', 'ts', '3gp', 'ogv'],
-  output: ['jpg', 'png', 'webp', 'ico', 'gif', 'avif', 'heic', 'mp4'],
+  output: [
+    'jpg', 'png', 'webp', 'ico', 'gif', 'avif', 'heic',
+    'mp4', 'webm', 'mkv', 'mov', 'avi', 'mp3', 'wav',
+  ],
   // Which converter writes each output format. The real matrix comes from
   // the bridge, which reports this from the converter registry; the copy
   // here has to agree with it or the UI would group formats wrongly.
@@ -91,16 +94,19 @@ const mockSupportedFormats = {
   kinds: {
     jpg: 'image', png: 'image', webp: 'image', ico: 'image',
     gif: 'image', avif: 'image', heic: 'image',
-    mp4: 'video',
+    mp4: 'video', webm: 'video', mkv: 'video', mov: 'video', avi: 'video',
+    mp3: 'audio', wav: 'audio',
   },
   // The donut's ring membership, mirroring
   // ConverterRegistry.supported_output_rings: every format in the ring its
   // converter kind declares, plus GIF in the video ring as well - the mock's
   // video rows offer gif -> mp4, so its video ring has to show GIF like the
-  // real payload does. Pinned to the backend by tests/test_formats.py.
+  // real payload does. Audio extraction writes its own kind, so MP3/WAV sit
+  // in the audio ring. Pinned to the backend by tests/test_formats.py.
   rings: {
-    image: ['jpg', 'png', 'webp', 'ico', 'gif', 'avif', 'heic'],
-    video: ['gif', 'mp4'],
+    image: ['avif', 'gif', 'heic', 'ico', 'jpg', 'png', 'webp'],
+    video: ['avi', 'gif', 'mkv', 'mov', 'mp4', 'webm'],
+    audio: ['mp3', 'wav'],
   },
   // The video rows of `input` above, listed separately because the mock's
   // matrix builder (just below) has to know which inputs are videos - the
@@ -111,11 +117,11 @@ const mockSupportedFormats = {
 };
 
 // The mock's input->target matrix, the shape FluxAPI.getSupportedFormats()
-// returns as `targets`: images convert to image formats, videos to MP4 plus
-// the still formats a frame can be pulled to - the same pairing rule the
-// registry derives, built from the lists above so the two cannot disagree.
-// Built here rather than inside the literal so the test parsers above keep
-// reading flat arrays.
+// returns as `targets`: images convert to image formats, videos to every
+// video and audio target plus the still formats a frame can be pulled to -
+// the same pairing rule the registry derives, built from the lists above so
+// the two cannot disagree. Built here rather than inside the literal so the
+// test parsers above keep reading flat arrays.
 mockSupportedFormats.targets = {};
 mockSupportedFormats.input.forEach((input) => {
   // jpeg/heif rows are looked up under their normalized names, exactly as
@@ -123,11 +129,17 @@ mockSupportedFormats.input.forEach((input) => {
   const key = input === 'jpeg' ? 'jpg' : (input === 'heif' ? 'heic' : input);
   const isVideo = mockSupportedFormats.videoInputs.includes(input);
   // GIF is read as a video as well (gif -> mp4 runs through ffmpeg, exactly
-  // like the registry's gif input row), so its row offers MP4; every other
-  // image row still excludes all video formats.
-  const takesMp4 = isVideo || input === 'gif';
+  // like the registry's gif input row), so its row offers the video targets;
+  // every other image row still excludes them. Audio extraction is for
+  // video containers only - a GIF has no audio stream, and a still has none.
+  const takesVideo = isVideo || input === 'gif';
+  const takesAudio = isVideo;
   mockSupportedFormats.targets[input] = mockSupportedFormats.output.filter(
-    (out) => out !== key && (takesMp4 || mockSupportedFormats.kinds[out] !== 'video')
+    (out) => out !== key && (
+      mockSupportedFormats.kinds[out] === 'image'
+      || (takesVideo && mockSupportedFormats.kinds[out] === 'video')
+      || (takesAudio && mockSupportedFormats.kinds[out] === 'audio')
+    )
   );
 });
 

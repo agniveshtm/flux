@@ -35,30 +35,44 @@ from flux.converter import UnsupportedFormatError, reserve_unique_output
 from flux.services.ffmpeg import (
     CANCEL_GRACE_SECONDS,
     VIDEO_INPUT_FORMATS,
+    VIDEO_OUTPUT_FORMATS,
     error_from_stderr,
     parse_duration,
     parse_out_time,
     video_available,
+    video_output_available,
 )
 from flux.services.image_converter import PillowImageConverter
 from flux.services.video_converter import (
+    AVI_INDEX_RESERVE_BYTES,
     FFmpegVideoConverter,
-    vp9_crf,
+    container_args,
+    video_audio_args,
     video_encode_args,
+    vp9_crf,
     x264_crf,
 )
 
-# The fake's encoders listing. Both real preference-table entries appear, in
+# The fake's encoders listing. Every real preference-table entry appears, in
 # the format ffmpeg -encoders prints (the regex in ffmpeg.py keys off it).
 _ENCODERS_BOTH = (
     "Encoders:\n"
     " V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC\n"
     " V....D libvpx-vp9           Google VP9\n"
     " A....D aac                  AAC (Advanced Audio Coding)\n"
+    " A....D libopus              libopus Opus\n"
+    " A....D libmp3lame           libmp3lame MP3\n"
+    " A....D pcm_s16le            PCM signed 16-bit little-endian\n"
 )
 _ENCODERS_VP9_ONLY = (
     "Encoders:\n"
     " V....D libvpx-vp9           Google VP9\n"
+    " A....D aac                  AAC (Advanced Audio Coding)\n"
+    " A....D libopus              libopus Opus\n"
+)
+_ENCODERS_NO_OPUS = (
+    "Encoders:\n"
+    " V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC\n"
     " A....D aac                  AAC (Advanced Audio Coding)\n"
 )
 _ENCODERS_NEITHER = "Encoders:\n A....D aac   AAC (Advanced Audio Coding)\n"
@@ -186,9 +200,14 @@ def fake_ffmpeg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         )
         launcher.chmod(0o755)
 
+    # The converter launches through its own locate_ffmpeg reference; the
+    # capability probe launches through ffmpeg.py's. Point both at the fake,
+    # and let the real -encoders parsing decide availability, so the gating
+    # under test is the gating the app uses.
     monkeypatch.setattr(video_converter, "locate_ffmpeg", lambda: launcher)
-    monkeypatch.setattr(video_converter, "video_available", lambda: True)
-    monkeypatch.setattr(video_converter, "pick_encoder", lambda: "libx264")
+    monkeypatch.setattr(ffmpeg_module, "locate_ffmpeg", lambda: launcher)
+    monkeypatch.setenv("FAKE_ENCODERS", _ENCODERS_BOTH)
+    ffmpeg_module.reset_probe_cache()
     return launcher
 
 
@@ -290,6 +309,28 @@ def test_video_encode_args_is_one_table_per_encoder() -> None:
         video_encode_args("mpeg4", None)
 
 
+def test_video_audio_args_pairs_each_container_with_its_codec() -> None:
+    # WebM and MKV carry the royalty-free Opus pairing; the other three keep
+    # AAC, the universally decodable one MP4 already used. This has to agree
+    # with VIDEO_AUDIO_ENCODERS, which is what capability gating checks.
+    assert video_audio_args("webm") == ["-c:a", "libopus", "-b:a", "128k"]
+    assert video_audio_args("mkv") == ["-c:a", "libopus", "-b:a", "128k"]
+    for target in ("mp4", "mov", "avi"):
+        assert video_audio_args(target) == ["-c:a", "aac", "-b:a", "128k"]
+
+
+def test_container_args_are_the_muxer_specific_flags() -> None:
+    # +faststart only for MP4; MOV is the same command deliberately without
+    # it. AVI reserves room for its OpenDML superindex; WebM/MKV need
+    # nothing beyond the codec choice.
+    assert container_args("mp4") == ["-movflags", "+faststart"]
+    assert container_args("avi") == [
+        "-reserve_index_space", str(AVI_INDEX_RESERVE_BYTES)
+    ]
+    for target in ("webm", "mkv", "mov"):
+        assert container_args(target) == []
+
+
 def test_error_from_stderr_prefers_the_diagnosis() -> None:
     lines = [
         "frame=  10 fps=0.0 q=0.0 size=       0kB time=00:00:01",
@@ -310,7 +351,9 @@ def test_converter_declares_formats_exactly_when_ffmpeg_can_encode() -> None:
     # stays exactly as image-only as it was before Phase 2.1.
     converter = FFmpegVideoConverter()
     if video_available():
-        assert converter.supported_output_formats == ["mp4"]
+        assert converter.supported_output_formats == [
+            fmt for fmt in VIDEO_OUTPUT_FORMATS if video_output_available(fmt)
+        ]
         # GIF rides along as an input - gif -> mp4 is a video conversion -
         # but never as an output: the image converter writes GIF.
         assert set(converter.supported_input_formats) == set(VIDEO_INPUT_FORMATS) | {"gif"}
@@ -322,12 +365,13 @@ def test_converter_declares_formats_exactly_when_ffmpeg_can_encode() -> None:
 def test_convert_refuses_targets_it_cannot_write(
     fake_ffmpeg: Path, tmp_path: Path
 ) -> None:
-    # Rejected before a single file is touched: MP4 is the only output Phase
-    # 2.1 ships, and a target outside supported_output_formats must not reach
-    # the encode loop (where it would fail much later and much less clearly).
+    # Rejected before a single file is touched: a target outside
+    # supported_output_formats must not reach the encode loop (where it would
+    # fail much later and much less clearly). "flac" is an audio format this
+    # converter never writes; "webm" is a valid video output now.
     converter = FFmpegVideoConverter()
     with pytest.raises(UnsupportedFormatError):
-        _convert(converter, ["clip.mp4"], tmp_path, target_format="webm")
+        _convert(converter, ["clip.mp4"], tmp_path, target_format="flac")
 
 
 def test_flux_ffmpeg_env_override_wins(
@@ -391,6 +435,47 @@ def test_pick_encoder_follows_the_preference_table(
     assert ffmpeg_module.pick_encoder() is None
     assert not ffmpeg_module.video_available()
     assert not (set(ffmpeg_module.MP4_ENCODERS) & ffmpeg_module.probe_encoders())
+
+
+def test_video_outputs_are_gated_per_container(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each container hinges on its own encoder *and* its paired audio encoder.
+
+    A build can carry libx264 without libopus: MP4/MOV/AVI still work (AAC),
+    but WebM/MKV must disappear rather than promise an Opus muxer the build
+    cannot run. This is the per-output half of the capability story, distinct
+    from the all-or-nothing video_available() gate.
+    """
+    script = tmp_path / "fake_ffmpeg.py"
+    script.write_text(_FAKE_FFMPEG, encoding="utf-8")
+    if sys.platform == "win32":
+        launcher = tmp_path / "ffmpeg.cmd"
+        launcher.write_text(
+            f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8"
+        )
+    else:
+        launcher = tmp_path / "ffmpeg"
+        launcher.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8"
+        )
+        launcher.chmod(0o755)
+    monkeypatch.setattr(ffmpeg_module, "locate_ffmpeg", lambda: launcher)
+
+    monkeypatch.setenv("FAKE_ENCODERS", _ENCODERS_NO_OPUS)
+    ffmpeg_module.reset_probe_cache()
+    # libx264 is present, so every AAC container survives; the Opus pairings
+    # do not. "gif" is not an output here - the image converter writes it.
+    assert FFmpegVideoConverter().supported_output_formats == ["mp4", "mov", "avi"]
+    assert ffmpeg_module.video_output_available("webm") is False
+    assert ffmpeg_module.video_output_available("mkv") is False
+    # ...but video conversion as a whole still exists.
+    assert ffmpeg_module.video_available()
+
+    monkeypatch.setenv("FAKE_ENCODERS", _ENCODERS_NEITHER)
+    ffmpeg_module.reset_probe_cache()
+    assert FFmpegVideoConverter().supported_output_formats == []
+    assert not ffmpeg_module.video_available()
 
 
 # --- the encode loop --------------------------------------------------------
@@ -646,6 +731,69 @@ def test_command_shape_matches_the_reported_flags(
     assert argv[argv.index("-c:v") + 1] in ("libx264", "libvpx-vp9")
     assert "-crf" in argv
     assert argv[argv.index("-pix_fmt") + 1] == "yuv420p"
+
+
+@pytest.mark.parametrize(
+    ("target", "video_encoder", "audio_encoder", "container_flag"),
+    [
+        ("mp4", "libx264", "aac", "-movflags"),
+        ("webm", "libvpx-vp9", "libopus", None),
+        ("mkv", "libx264", "libopus", None),
+        ("mov", "libx264", "aac", None),
+        ("avi", "libx264", "aac", "-reserve_index_space"),
+    ],
+)
+def test_each_container_builds_its_own_command(
+    fake_ffmpeg: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    video_encoder: str,
+    audio_encoder: str,
+    container_flag: str | None,
+) -> None:
+    """Every output must reach the encoder pair and muxer flags its table names.
+
+    The fake build carries both video encoders and both audio pairs, so the
+    chosen codecs are exactly the preference tables' first entries: libx264
+    for four containers, VP9 for WebM, AAC for MP4/MOV/AVI and Opus for
+    WebM/MKV. A shared codec path here would silently write the wrong mux.
+    """
+    argv_file = tmp_path / "argv.txt"
+    monkeypatch.setenv("FAKE_ARGV_FILE", str(argv_file))
+    clip = _make_clip(tmp_path)
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+
+    result = _convert(
+        FFmpegVideoConverter(), [str(clip)], outdir, target_format=target
+    )
+
+    assert not result.errors, result.errors
+    assert result.outputs == [(str(clip), str(outdir / f"clip.{target}"))]
+    argv = argv_file.read_text(encoding="utf-8").splitlines()
+
+    assert argv[argv.index("-c:v") + 1] == video_encoder
+    assert argv[argv.index("-c:a") + 1] == audio_encoder
+    assert argv[-1] == str(outdir / f"clip.{target}")
+
+    if container_flag is None:
+        # Nothing container-specific: no faststart, no index reserve.
+        assert "-movflags" not in argv, argv
+        assert "-reserve_index_space" not in argv, argv
+    else:
+        assert container_flag in argv, f"missing {container_flag} in {argv}"
+    if target == "mp4":
+        assert argv[argv.index("-movflags") + 1] == "+faststart"
+    if target == "avi":
+        assert argv[argv.index("-reserve_index_space") + 1] == str(
+            AVI_INDEX_RESERVE_BYTES
+        )
+    if video_encoder == "libvpx-vp9":
+        # WebM only accepts VP9, and -b:v 0 is how libvpx enters CRF mode.
+        assert argv[argv.index("-b:v") + 1] == "0"
+        assert argv[argv.index("-deadline") + 1] == "good"
+        assert argv[argv.index("-cpu-used") + 1] in {"2", "3", "4", "5"}
 
 
 # --- frame extraction (video -> still) --------------------------------------

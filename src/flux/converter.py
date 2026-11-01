@@ -32,6 +32,22 @@ def normalize_format(value: str) -> str:
     return normalized
 
 
+def clamp_quality(quality: int | None) -> int:
+    """The quality slider's 0-100 value, or 50 when the user never moved it.
+
+    50 is the neutral point the encoder mappings centre on, so "no quality
+    chosen" behaves like the middle of the slider rather than an extreme.
+    Every encoder maps this one number into its own scale (x264 0-51, VP9
+    0-63, LAME 0-9), because the slider means "quality", not a codec value.
+    """
+    if quality is None:
+        return 50
+    try:
+        return max(0, min(100, int(quality)))
+    except (TypeError, ValueError):
+        return 50
+
+
 def reserve_unique_output(
     output_directory: Path, stem: str, target_format: str, used_names: set[str]
 ) -> Path:
@@ -69,6 +85,109 @@ def reserve_unique_output(
         os.close(fd)
         used_names.add(name)
         return path
+
+
+def convert_files(
+    *,
+    input_paths: list[str],
+    output_dir: str,
+    target_format: str,
+    allowed_input_formats: list[str],
+    encode_one: Callable[[Path, Path, int, int], tuple[bool, str | None]],
+    progress_cb: Callable[[float, float], None],
+    cancel_event: Event,
+) -> ConversionResult:
+    """Convert a batch, one file at a time, through a caller's encoder.
+
+    The loop both ffmpeg converters need: validate the input, claim a unique
+    output name, run one encode, and clean up on failure or cancellation. It
+    lives here rather than twice in the converters so a file that fails (or
+    is cancelled) leaves exactly the same nothing behind, whichever encoder
+    produced it.
+
+    ``encode_one(source, output_path, completed_before, total)`` returns
+    ``(success, error_message)``; the caller closes over its own options,
+    progress callback and cancel event. ``target_format`` is both the
+    extension and the reserved name's suffix, normalized once here.
+    """
+    target = normalize_format(target_format)
+    output_directory = Path(output_dir).expanduser()
+    if not output_directory.is_dir():
+        raise NotADirectoryError(f"Output directory does not exist: {output_directory}")
+
+    result = ConversionResult()
+    total = len(input_paths)
+    used_names: set[str] = set()
+
+    for index, input_path in enumerate(input_paths, start=1):
+        if cancel_event.is_set():
+            result.errors.append("Conversion cancelled")
+            break
+
+        source = Path(input_path).expanduser()
+        cancelled_mid_file = False
+        output_path: Path | None = None
+        try:
+            if not source.is_file():
+                raise FileNotFoundError(f"Input file does not exist: {source}")
+
+            input_format = normalize_format(source.suffix)
+            if input_format not in allowed_input_formats:
+                raise UnsupportedFormatError(
+                    f"Unsupported input format: {input_format or 'unknown'}"
+                )
+
+            # Claim the name atomically (see reserve_unique_output):
+            # exists() alone lets two concurrent jobs pick the same name
+            # and let -y replace one finished result with the other's.
+            output_path = reserve_unique_output(
+                output_directory, source.stem, target, used_names
+            )
+
+            ok, error_message = encode_one(
+                source, output_path, index - 1, total
+            )
+
+            if cancel_event.is_set():
+                # The "q" path finalises a playable file, but a cancelled
+                # job reports no outputs - leaving the half-length video
+                # on disk would look like a conversion that quietly
+                # succeeded with the wrong duration. The name was
+                # reserved above, so the path is this job's alone and
+                # removing it cannot touch anything pre-existing.
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                cancelled_mid_file = True
+                result.errors.append("Conversion cancelled")
+            elif not ok:
+                raise RuntimeError(error_message or "ffmpeg failed")
+            else:
+                result.output_paths.append(str(output_path))
+                # Reported against the path the caller supplied, because
+                # the frontend matches outputs to rows by string equality
+                # on the path it sent (same reason as the image converter).
+                result.outputs.append((input_path, str(output_path)))
+        except Exception as exc:
+            # A failed file leaves two things behind: the 0-byte name
+            # reserve_unique_output claimed, and any partial ffmpeg
+            # wrote over it. Both would outlive the error and look like
+            # a finished result, so the claimed path goes away with the
+            # failure.
+            if output_path is not None:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            result.errors.append(f"{source.name}: {exc}")
+        finally:
+            progress_cb(index, total)
+
+        if cancelled_mid_file:
+            break
+
+    return result
 
 
 class BaseConverter(ABC):

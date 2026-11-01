@@ -1,4 +1,4 @@
-"""FFmpegVideoConverter: Phase 2.1 video conversion (MP4 out).
+"""FFmpegVideoConverter: video conversion to MP4, WebM, MKV, MOV and AVI.
 
 Implements BaseConverter against the bundled ffmpeg sidecar binary. The
 ffmpeg process is invoked over argv + pipes (subprocess), never linked -
@@ -8,18 +8,19 @@ communication between two separate programs, not linking).
 
 The researched process behaviours - progress parsing, continuous stdout
 drain, the three-rung cancel chain, duration from stderr instead of
-ffprobe - now live once in flux.services.ffmpeg.run_ffmpeg, shared with the
-image converter's video-to-GIF encode. This module owns what is MP4-specific:
-the encoder preference table, the CRF mappings, and the command line.
+ffprobe - live once in flux.services.ffmpeg.run_ffmpeg, shared with the
+image converter's video-to-GIF encode and the audio converter. This module
+owns what is container-specific: the encoder preference table, the CRF
+mappings, the audio pairing and the muxer flags.
 
 Inputs cover the video containers plus GIF, which the video converter reads
 as an animation source (GIF -> MP4) - GIF is written as an image format by
-the image converter, and read as a video by this one.
+the image converter, and read as a video by this one. Outputs are
+capability-gated per container (see flux.services.ffmpeg).
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from threading import Event
 from typing import Callable
 
@@ -27,34 +28,24 @@ from flux.converter import (
     BaseConverter,
     ConversionResult,
     UnsupportedFormatError,
+    clamp_quality,
+    convert_files,
     normalize_format,
-    reserve_unique_output,
 )
 from flux.services.ffmpeg import (
     VIDEO_INPUT_FORMATS,
+    VIDEO_OUTPUT_FORMATS,
     locate_ffmpeg,
-    pick_encoder,
     run_ffmpeg,
     video_available,
+    video_encoder_for,
+    video_output_available,
 )
 
-# The one output Phase 2.1 ships. Phase 2.2+ append their own rows here and
-# in flux.services.ffmpeg.MP4_ENCODERS-style tables, not in the frontend.
-OUTPUT_FORMATS = ("mp4",)
-
-
-def _clamp_quality(quality: int | None) -> int:
-    """The slider's 0-100 value, or 50 when the user never moved it.
-
-    50 is the neutral point the mappings below centre on, so "no quality
-    chosen" behaves like the middle of the slider rather than an extreme.
-    """
-    if quality is None:
-        return 50
-    try:
-        return max(0, min(100, int(quality)))
-    except (TypeError, ValueError):
-        return 50
+# Every video output, in the researched matrix's order. The frontend never
+# keeps this list: the registry derives the matrix and rings from the
+# converter that writes each format.
+OUTPUT_FORMATS = VIDEO_OUTPUT_FORMATS
 
 
 def x264_crf(quality: int | None) -> int:
@@ -65,7 +56,7 @@ def x264_crf(quality: int | None) -> int:
     """
     if quality is None:
         return 23
-    return 28 - (_clamp_quality(quality) * 10) // 100
+    return 28 - (clamp_quality(quality) * 10) // 100
 
 
 def vp9_crf(quality: int | None) -> int:
@@ -76,7 +67,7 @@ def vp9_crf(quality: int | None) -> int:
     """
     if quality is None:
         return 32
-    return 40 - (_clamp_quality(quality) * 30) // 100
+    return 40 - (clamp_quality(quality) * 30) // 100
 
 
 def video_encode_args(encoder: str, quality: int | None) -> list[str]:
@@ -107,7 +98,47 @@ def video_encode_args(encoder: str, quality: int | None) -> list[str]:
             "-cpu-used", "4",
             "-pix_fmt", "yuv420p",
         ]
-    raise UnsupportedFormatError(f"No MP4 encode arguments for encoder: {encoder}")
+    raise UnsupportedFormatError(f"No video encode arguments for encoder: {encoder}")
+
+
+def video_audio_args(target_format: str) -> list[str]:
+    """The audio half of one container's command line.
+
+    WebM and MKV pair with Opus (the royalty-free pairing the research
+    report recommends); every other container keeps AAC, which is the
+    universally decodable pairing MP4 already used. This is the same table
+    capability gating reads (VIDEO_AUDIO_ENCODERS), so the codec that is
+    checked for is the codec that is written.
+    """
+    if target_format in ("webm", "mkv"):
+        return ["-c:a", "libopus", "-b:a", "128k"]
+    return ["-c:a", "aac", "-b:a", "128k"]
+
+
+# Bytes reserved at the head of each AVI stream for its OpenDML superindex.
+# The research table said "16M", but that is a per-stream JUNK chunk before
+# the stream headers: on ffmpeg 9.0.2 a 16 MiB reserve pushes the second
+# stream's `strl` past the demuxer's header window, so the audio stream
+# silently vanishes and `-v error` reports "tag JUNK has size ...". The
+# superindex itself is ~16 bytes per GiB of file, so 64 KiB covers a 4 TiB
+# AVI with room to spare and stays well inside the parser's limit.
+AVI_INDEX_RESERVE_BYTES = 65536
+
+
+def container_args(target_format: str) -> list[str]:
+    """Muxer flags specific to one container, or an empty list.
+
+    MP4 gets +faststart so playback can begin before the whole file
+    downloads. MOV is otherwise the same command but deliberately without
+    it; AVI gets a modest reserve_index_space so a long file can still seek
+    reliably (see AVI_INDEX_RESERVE_BYTES for why it is not the research
+    table's 16M); MKV and WebM need nothing beyond the codec choice.
+    """
+    if target_format == "mp4":
+        return ["-movflags", "+faststart"]
+    if target_format == "avi":
+        return ["-reserve_index_space", str(AVI_INDEX_RESERVE_BYTES)]
+    return []
 
 
 class FFmpegVideoConverter(BaseConverter):
@@ -121,20 +152,27 @@ class FFmpegVideoConverter(BaseConverter):
         # empty list, the registry maps no formats to this converter, and
         # the UI never offers video conversion - the same pattern as the
         # AVIF/HEIF gates in image_converter, so a source checkout without
-        # vendor/ffmpeg.exe runs exactly as it did before Phase 2.1.
+        # vendor/ffmpeg.exe runs exactly as it did before video.
         #
         # GIF joins the containers because ffmpeg reads it as an animation
-        # and this converter writes a real MP4 from it - while the image
+        # and this converter writes a real video from it - while the image
         # converter keeps reading GIF through Pillow for every still target.
-        if not video_available():
+        if not self.supported_output_formats:
             return []
         return [*VIDEO_INPUT_FORMATS, "gif"]
 
     @property
     def supported_output_formats(self) -> list[str]:
+        """The containers this build can actually write.
+
+        Gating is per output rather than all-or-nothing: a build with VP9
+        but no libx264 still writes WebM, and a build missing libopus simply
+        does not offer WebM/MKV. With no video encoder at all the list is
+        empty and the converter registers nothing.
+        """
         if not video_available():
             return []
-        return list(OUTPUT_FORMATS)
+        return [fmt for fmt in OUTPUT_FORMATS if video_output_available(fmt)]
 
     def convert(
         self,
@@ -149,110 +187,55 @@ class FFmpegVideoConverter(BaseConverter):
         if target not in self.supported_output_formats:
             raise UnsupportedFormatError(f"Unsupported output format: {target_format}")
 
-        encoder = pick_encoder()
+        encoder = video_encoder_for(target)
         ffmpeg = locate_ffmpeg()
         if encoder is None or ffmpeg is None:
             return ConversionResult(
                 errors=["Video conversion is unavailable: no capable ffmpeg build was found."]
             )
 
-        output_directory = Path(output_dir).expanduser()
-        if not output_directory.is_dir():
-            raise NotADirectoryError(f"Output directory does not exist: {output_directory}")
-
         conversion_options = options if isinstance(options, dict) else {}
-        result = ConversionResult()
-        total = len(input_paths)
-        used_names: set[str] = set()
 
-        for index, input_path in enumerate(input_paths, start=1):
-            if cancel_event.is_set():
-                result.errors.append("Conversion cancelled")
-                break
+        def encode_one(
+            source: Path,
+            output_path: Path,
+            completed_before: int,
+            total: float,
+        ) -> tuple[bool, str | None]:
+            return self._encode_one(
+                ffmpeg=ffmpeg,
+                encoder=encoder,
+                target_format=target,
+                source=source,
+                output_path=output_path,
+                options=conversion_options,
+                progress_cb=progress_cb,
+                completed_before=completed_before,
+                total=total,
+                cancel_event=cancel_event,
+            )
 
-            source = Path(input_path).expanduser()
-            cancelled_mid_file = False
-            output_path: Path | None = None
-            try:
-                if not source.is_file():
-                    raise FileNotFoundError(f"Input file does not exist: {source}")
-
-                input_format = normalize_format(source.suffix)
-                if input_format not in self.supported_input_formats:
-                    raise UnsupportedFormatError(
-                        f"Unsupported input format: {input_format or 'unknown'}"
-                    )
-
-                # Claim the name atomically (see reserve_unique_output):
-                # exists() alone lets two concurrent jobs pick the same name
-                # and let -y replace one finished result with the other's.
-                output_path = reserve_unique_output(
-                    output_directory, source.stem, "mp4", used_names
-                )
-
-                ok, error_message = self._encode_one(
-                    ffmpeg=ffmpeg,
-                    encoder=encoder,
-                    source=source,
-                    output_path=output_path,
-                    options=conversion_options,
-                    progress_cb=progress_cb,
-                    completed_before=index - 1,
-                    total=total,
-                    cancel_event=cancel_event,
-                )
-
-                if cancel_event.is_set():
-                    # The "q" path finalises a playable file, but a cancelled
-                    # job reports no outputs - leaving the half-length video
-                    # on disk would look like a conversion that quietly
-                    # succeeded with the wrong duration. The name was
-                    # reserved above, so the path is this job's alone and
-                    # removing it cannot touch anything pre-existing.
-                    try:
-                        output_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                    cancelled_mid_file = True
-                    result.errors.append("Conversion cancelled")
-                elif not ok:
-                    raise RuntimeError(error_message or "ffmpeg failed")
-                else:
-                    result.output_paths.append(str(output_path))
-                    # Reported against the path the caller supplied, because
-                    # the frontend matches outputs to rows by string equality
-                    # on the path it sent (same reason as the image converter).
-                    result.outputs.append((input_path, str(output_path)))
-            except Exception as exc:
-                # A failed file leaves two things behind: the 0-byte name
-                # reserve_unique_output claimed, and any partial ffmpeg
-                # wrote over it. Both would outlive the error and look like
-                # a finished result, so the claimed path goes away with the
-                # failure.
-                if output_path is not None:
-                    try:
-                        output_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                result.errors.append(f"{source.name}: {exc}")
-            finally:
-                progress_cb(index, total)
-
-            if cancelled_mid_file:
-                break
-
-        return result
+        return convert_files(
+            input_paths=input_paths,
+            output_dir=output_dir,
+            target_format=target,
+            allowed_input_formats=self.supported_input_formats,
+            encode_one=encode_one,
+            progress_cb=progress_cb,
+            cancel_event=cancel_event,
+        )
 
     def _encode_one(
         self,
         ffmpeg: Path,
         encoder: str,
+        target_format: str,
         source: Path,
         output_path: Path,
         options: dict,
         progress_cb: Callable[[float, float], None],
         completed_before: int,
-        total: int,
+        total: float,
         cancel_event: Event,
     ) -> tuple[bool, str | None]:
         """Run one ffmpeg encode. Returns (success, error_message).
@@ -266,8 +249,9 @@ class FFmpegVideoConverter(BaseConverter):
         claim, not -y, is the race guard).
 
         Progress, the stdout drain and the three-rung cancel chain are the
-        shared engine's job (flux.services.ffmpeg.run_ffmpeg); everything
-        MP4-specific stops at the command line below.
+        shared engine's job (flux.services.ffmpeg.run_ffmpeg). Everything
+        container-specific is one of the three tables below: the codec's
+        own CRF scale, the container's audio pairing, and its muxer flags.
         """
         cmd = [
             str(ffmpeg),
@@ -279,11 +263,8 @@ class FFmpegVideoConverter(BaseConverter):
             "-y",
             "-i", str(source),
             *video_encode_args(encoder, options.get("quality")),
-            # AAC for every video encoder: AAC-in-MP4 is the universally
-            # decodable pairing, unlike the Opus a WebM/VP9 line would use.
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-movflags", "+faststart",
+            *video_audio_args(target_format),
+            *container_args(target_format),
             str(output_path),
         ]
 

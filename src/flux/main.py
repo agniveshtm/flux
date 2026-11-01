@@ -8,7 +8,11 @@ import webview
 
 from flux import __version__
 from flux.converter import ConverterRegistry
-from flux.services import FFmpegVideoConverter, PillowImageConverter
+from flux.services import (
+    FFmpegAudioConverter,
+    FFmpegVideoConverter,
+    PillowImageConverter,
+)
 from flux.window import FluxAPI
 
 _CLI_USAGE = """\
@@ -119,6 +123,9 @@ def create_window() -> webview.Window | None:
     # FFmpegVideoConverter.supported_output_formats), so a source checkout
     # with no vendor/ffmpeg.exe behaves exactly as it did before video.
     registry.register(FFmpegVideoConverter())
+    # Audio extraction reads the same containers and registers nothing
+    # without a capable ffmpeg build, for the same reason.
+    registry.register(FFmpegAudioConverter())
 
     api = FluxAPI(registry)
 

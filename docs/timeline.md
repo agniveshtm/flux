@@ -186,3 +186,26 @@ through as literals. Tested in Git Bash - curl receives exactly two arguments.
 - **Open:** release packaging — `locate_ffmpeg` already checks beside the frozen exe, but `installer/flux.iss` does not ship `ffmpeg.exe` yet, so packaged builds run image-only; bundling the 105 MB binary also collides with the "<100 MB installer" success criterion. Needs a call before the next release.
 
 - Committed as `9572d8c` on `feature`: `feat(app): add video conversion, animated gif, and bundled ffmpeg`.
+
+## 2026-11-01 (Phase 2.2 — more containers and audio extraction)
+
+- Landed issue #21: video now converts to **WebM, MKV, MOV and AVI** alongside MP4, and clips extract to **MP3/WAV**. A new `FFmpegAudioConverter` (`kind = "audio"`) reads only the video containers, so audio targets never appear on a still or GIF row without a matrix exception. The format donut gained an audio ring and cycles image → video → audio.
+
+- Codec choices come from per-output tables in `services/ffmpeg.py`: `libvpx-vp9` + `libopus` for WebM, the MP4 preference + Opus for MKV, the MP4 preference + AAC for MOV/AVI, `libmp3lame` for MP3 and `pcm_s16le` for WAV. A container is offered only when both its video encoder and its paired audio encoder are present; MP3/WAV are gated on their own encoders. Everything still runs through the shared `run_ffmpeg()` pump and the new shared `converter.py::convert_files` / `clamp_quality` helpers.
+
+- Quality mapping stayed per encoder: x264 CRF 18–28, VP9 CRF 10–40, LAME `-q:a` 0–9 (default 2). `TARGET_PREFERENCE` now lists video then audio targets before stills, so an `.mp4` input preselects WebM while other clips land on MP4; image rows still land on JPG.
+
+- AVI's index reserve is **64 KiB per stream**, not the research table's `16M` (DECISIONS 2026-11-01). On ffmpeg 9.0.2 the 16 MiB JUNK padding pushes the second `strl` past the demuxer's header window: the audio stream vanishes and `-v error` reports a JUNK-tag notice. 64 KiB keeps both streams and decodes cleanly.
+
+- Tests **141 → 171**: container/audio command tables, per-output gating, per-container argv, a new `tests/test_audio_converter.py` (mapping, gating, stills refused, MP3/WAV argv, failure cleanup), `test_formats.py` rewritten for three kinds/rings and the new matrix, and `test_vendor_ffmpeg.py` extended with a real encode per output (both streams + clean decode) and a pin for `libvpx-vp9`/`libopus`/`libmp3lame`/`pcm_s16le`. `check-donut.js` now cycles all three rings.
+
+- Docs: PRD gained a Phase 2.2 section and acceptance criteria; ARCHITECTURE gained the audio converter, the codec tables and the AVI note; DECISIONS gained three ADRs (audio converter/kind, per-container gating, AVI reserve).
+
+- Gates green: `uv run pytest tests/ -q` (171 passed, real-ffmpeg tests included), `node scripts/check-frontend.js`, and all four UI checks. Changes are uncommitted on `frontend` pending review.
+
+- Carried over: `installer/flux.iss` still does not ship `ffmpeg.exe`, so packaged builds run image-only; the 105 MB binary vs <100 MB installer criterion still needs a decision.
+
+## 2026-11-01 (video row previews)
+
+- Fixed the "!" thumbnail on every video row. `getFilePreview` used to accept still images only (`"Only image files can be previewed."`), so a dropped clip fell through to the placeholder glyph even though ffmpeg was right there. It now routes the `VIDEO_INPUT_FORMATS` suffixes to a new `_video_preview`: one MJPEG frame from a fast input seek at 00:01 (falling back to 00:00 for clips shorter than a second), scaled inside `maxEdge` and returned as a normal `data:image/jpeg` URL. Rows and the fullscreen modal keep their existing `<img>` path - no player, no whole file on the bridge.
+- The still-image MIME map stays image-only (a clip handed to `<img>` is a broken image); `test_formats.py` now pins the video allowlist separately, and `test_vendor_ffmpeg.py` decodes the frame returned for the real synthetic clip. Fake-ffmpeg tests cover the seek fallback, a missing binary (`PREVIEW_UNAVAILABLE`) and a timeout (`READ_ERROR`). ARCHITECTURE's preview section documents the poster-frame path.

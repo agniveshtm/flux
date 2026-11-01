@@ -2,14 +2,14 @@
  * Flux Format Donut Component
  *
  * The format picker that sits beside the drop area: a ring of slices, one
- * per format the backend can write, with the kind of format (image, video)
- * chosen by the label in the middle.
+ * per format the backend can write, with the kind of format (image, video,
+ * audio) chosen by the label in the middle.
  *
  * A row of format chips was the previous answer and it did not survive
- * contact with Phase 2: image formats plus video formats in one line is a
- * long, generic list. A ring has room for both - the slices are grouped by
- * kind, and the centre toggles between them - so adding video formats
- * changes the ring rather than doubling the row.
+ * contact with Phase 2: image, video and audio formats in one line is a
+ * long, generic list. A ring has room for all of them - the slices are
+ * grouped by kind, and the centre cycles through the kinds - so adding a
+ * family changes the ring rather than growing the row.
  *
  * The formats and their kinds are passed in, never listed here: they come
  * from the backend's getSupportedFormats(), which reports the kind from the
@@ -27,13 +27,15 @@ window.Flux.FormatDonut = {
       type: Array,
       default: () => [],
     },
-    // format -> kind ('image', 'video'), as reported by the backend.
+    // format -> kind ('image', 'video', 'audio'), as reported by the
+    // backend.
     kinds: {
       type: Object,
       default: () => ({}),
     },
-    // Ring membership: { image: [formats], video: [formats] }, as reported
-    // by the backend's getSupportedFormats().rings. GIF arrives in both
+    // Ring membership: { image: [formats], video: [formats],
+    // audio: [formats] }, as reported by the backend's
+    // getSupportedFormats().rings. GIF arrives in both the image and video
     // rings - image conversion from stills, video conversion from clips -
     // and that dual membership is the backend's answer, not a rule this
     // component may invent. Falls back to grouping formats by `kinds` when
@@ -55,8 +57,9 @@ window.Flux.FormatDonut = {
   emits: ['select'],
   data() {
     return {
-      // Which kind the ring is showing. 'image' is the default because that
-      // is the only kind the app can convert today.
+      // Which kind the ring is showing. One of the backend's ring keys
+      // ('image', 'video', 'audio'), starting on image because that is the
+      // family the app has always opened on.
       mode: 'image',
       // The slice the pointer is over, if any. It takes the caption over
       // from the selected format while it is being pointed at.
@@ -91,6 +94,23 @@ window.Flux.FormatDonut = {
       switchTimer: null,
     };
   },
+  created() {
+    // A payload that has no image ring (not the case today, but derivable)
+    // still opens on something real.
+    if (!(this.groups[this.mode] || []).length && this.switchableKinds.length) {
+      this.mode = this.switchableKinds[0];
+    }
+  },
+  watch: {
+    // The payload can arrive after mount (and replace the dev mock). If the
+    // ring being shown has no formats in the new payload, move to one that
+    // does rather than leaving the donut on an empty kind.
+    groups() {
+      if (this.switchableKinds.length && !this.switchableKinds.includes(this.mode)) {
+        this.mode = this.switchableKinds[0];
+      }
+    },
+  },
   computed: {
     // The formats of each kind, in the order the backend listed them.
     groups() {
@@ -112,6 +132,26 @@ window.Flux.FormatDonut = {
     },
     currentFormats() {
       return this.groups[this.mode] || [];
+    },
+    // The kinds the centre can cycle through. A kind with no formats this
+    // build can write is not offered - a build without ffmpeg has exactly
+    // one ring, not two dead ones.
+    switchableKinds() {
+      return Object.keys(this.groups).filter(
+        (kind) => (this.groups[kind] || []).length > 0
+      );
+    },
+    canSwitch() {
+      return this.switchableKinds.length > 1;
+    },
+    nextKind() {
+      const kinds = this.switchableKinds;
+      if (!kinds.length) return this.mode;
+      const index = kinds.indexOf(this.mode);
+      return kinds[(index + 1) % kinds.length];
+    },
+    modeWord() {
+      return this.kindWord(this.mode);
     },
     // One colour per format, assigned across every format the backend
     // reports, so no two formats ever read as the same colour and a format
@@ -216,24 +256,24 @@ window.Flux.FormatDonut = {
     caption() {
       if (this.hovered) return this.hovered.toUpperCase();
       if (this.activeInMode) return this.active.toUpperCase();
-      return this.mode === 'video' ? 'Video' : 'Image';
+      return this.modeWord;
     },
     detail() {
       const count = this.currentFormats.length;
-      if (!count) {
-        return this.mode === 'video'
-          ? 'Video formats arrive with Phase 2'
-          : 'No image formats available';
-      }
-      return `${count} ${this.mode} formats`;
+      if (!count) return `No ${this.modeWord.toLowerCase()} formats available`;
+      return `${count} ${this.modeWord.toLowerCase()} formats`;
     },
     centreLabel() {
-      return this.mode === 'video' ? 'VID' : 'IMG';
+      return this.kindAbbreviation(this.mode);
     },
     centreTitle() {
-      return this.mode === 'video'
-        ? 'Showing video formats. Click for image formats.'
-        : 'Showing image formats. Click for video formats.';
+      if (!this.canSwitch) {
+        return `Only ${this.modeWord.toLowerCase()} formats are available.`;
+      }
+      return (
+        `Showing ${this.modeWord.toLowerCase()} formats. ` +
+        `Click for ${this.kindWord(this.nextKind).toLowerCase()} formats.`
+      );
     },
     // Short radial ticks just outside the well, one per slice boundary, so
     // the ring reads as a dial rather than as loose wedges. The boundaries
@@ -269,6 +309,18 @@ window.Flux.FormatDonut = {
     },
   },
   methods: {
+    // Human words for the backend's kind keys. Unknown kinds still render
+    // (capitalised, first three letters in the hub) rather than vanishing,
+    // so a future converter needs no frontend change to be usable.
+    kindWord(kind) {
+      const known = { image: 'Image', video: 'Video', audio: 'Audio' };
+      return known[kind] || String(kind || '').slice(0, 1).toUpperCase()
+        + String(kind || '').slice(1);
+    },
+    kindAbbreviation(kind) {
+      const known = { image: 'IMG', video: 'VID', audio: 'AUD' };
+      return known[kind] || String(kind || '').slice(0, 3).toUpperCase();
+    },
     // A stable per-format hue, seeded by the format's name and spread by
     // the golden angle.
     hueFor(id) {
@@ -335,8 +387,8 @@ window.Flux.FormatDonut = {
         + `L ${f(x3)} ${f(y3)} A ${inner} ${inner} 0 ${largeInner} 0 ${f(x4)} ${f(y4)} Z`;
     },
     toggleMode() {
-      if (this.disabled) return;
-      this.mode = this.mode === 'image' ? 'video' : 'image';
+      if (this.disabled || !this.canSwitch) return;
+      this.mode = this.nextKind;
       this.hovered = '';
       // Let the new ring settle in rather than snap: the class rides the
       // svg for the length of the animation (see input.css).
@@ -580,7 +632,7 @@ window.Flux.FormatDonut = {
         <button
           type="button"
           class="absolute inset-0 m-auto h-16 w-16 rounded-full flex items-center justify-center text-xs font-bold tracking-widest bg-surface-2 ring-1 ring-line text-muted shadow-sm transition duration-150 hover:text-accent hover:ring-accent hover:bg-accent-tint disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-accent"
-          :disabled="disabled"
+          :disabled="disabled || !canSwitch"
           :title="centreTitle"
           :aria-label="centreTitle"
           @click="toggleMode"

@@ -257,7 +257,7 @@ window.Flux.FileRow = {
          @click.self="closeFullscreen"
          role="dialog"
          aria-modal="true"
-         aria-label="Image preview">
+         aria-label="Preview">
       <button
         type="button"
         class="preview-modal-close"
