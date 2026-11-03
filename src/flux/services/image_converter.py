@@ -9,7 +9,13 @@ from typing import Callable
 from PIL import Image, ImageOps, features
 
 from flux.converter import BaseConverter, ConversionResult, UnsupportedFormatError, normalize_format, reserve_unique_output
-from flux.services.ffmpeg import VIDEO_INPUT_FORMATS, locate_ffmpeg, run_ffmpeg, video_available
+from flux.services.ffmpeg import (
+    NO_WINDOW_FLAGS,
+    VIDEO_INPUT_FORMATS,
+    locate_ffmpeg,
+    run_ffmpeg,
+    video_available,
+)
 
 def _avif_available() -> bool:
     """Whether this Pillow build can encode AVIF.
@@ -292,6 +298,7 @@ class PillowImageConverter(BaseConverter):
                 capture_output=True,
                 text=True,
                 timeout=60,
+                creationflags=NO_WINDOW_FLAGS,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             frame_path.unlink(missing_ok=True)

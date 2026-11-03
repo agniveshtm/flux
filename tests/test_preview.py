@@ -96,9 +96,11 @@ def test_video_preview_returns_a_poster_frame_data_url(
     source.write_bytes(b"not a real video, ffmpeg is faked")
 
     calls: list[list[str]] = []
+    kwargs_seen: list[dict[str, object]] = []
 
     def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         calls.append(cmd)
+        kwargs_seen.append(kwargs)
         return _completed(stdout=_FAKE_JPEG)
 
     monkeypatch.setattr(window_module, "locate_ffmpeg", lambda: Path("ffmpeg"))
@@ -117,6 +119,10 @@ def test_video_preview_returns_a_poster_frame_data_url(
     assert "force_original_aspect_ratio=decrease" in scale, scale
     assert "-frames:v" in cmd and cmd[cmd.index("-frames:v") + 1] == "1"
     assert cmd[-1] == "pipe:1"
+    # A windowed build has no console, so a console child would flash its own.
+    # The preview must spawn ffmpeg with the no-window flag like every other
+    # spawn in the app (tests/test_video_converter.py pins the ffmpeg side).
+    assert kwargs_seen[0].get("creationflags") == window_module.NO_WINDOW_FLAGS
 
 
 def test_video_preview_clamps_edges_before_running_ffmpeg(
