@@ -104,6 +104,28 @@ VIDEO_INPUT_FORMATS = (
 _ENCODERS_CACHE: frozenset[str] | None = None
 _MUXERS_CACHE: frozenset[str] | None = None
 
+# Windows gives a console child of a console-less (windowed) process its own
+# console window, which flashes on screen for the life of the child. Every
+# ffmpeg and taskkill spawn here passes this: without it a packaged build shows
+# a black shell once per capability probe at startup (two, for -encoders and
+# -muxers) and again for every conversion, preview and cancel. The value is 0
+# off Windows, so the kwarg is always safe to pass.
+NO_WINDOW_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+def ffmpeg_popen_flags() -> int:
+    """CreateProcess flags for a long-running ffmpeg encode.
+
+    The no-window flag removes the console a windowed build would otherwise
+    show; CREATE_NEW_PROCESS_GROUP (Windows only) is what makes CTRL_BREAK
+    deliverable as the middle rung of the cancel chain. The two combine: the
+    flag hides the console without affecting signal delivery to the group.
+    """
+    flags = NO_WINDOW_FLAGS
+    if sys.platform == "win32":
+        flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+    return flags
+
 # ffmpeg -encoders output format: "<VAS> <name> <description>"
 # e.g. " V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC"
 _ENCODER_LINE = re.compile(r"^\s*[VAS][.\w]*\s+(\S+)", re.MULTILINE)
@@ -173,6 +195,7 @@ def probe_encoders(ffmpeg: Path | None = None) -> frozenset[str]:
             capture_output=True,
             text=True,
             timeout=15,
+            creationflags=NO_WINDOW_FLAGS,
         )
         encoders = frozenset(
             match.group(1) for match in _ENCODER_LINE.finditer(result.stdout)
@@ -213,6 +236,7 @@ def probe_muxers(ffmpeg: Path | None = None) -> frozenset[str]:
             capture_output=True,
             text=True,
             timeout=15,
+            creationflags=NO_WINDOW_FLAGS,
         )
         muxers = frozenset(
             match.group(1) for match in _MUXER_LINE.finditer(result.stdout)
@@ -444,6 +468,7 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
                 ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                 capture_output=True,
                 timeout=10,
+                creationflags=NO_WINDOW_FLAGS,
             )
             return
         except (OSError, subprocess.SubprocessError):
@@ -486,10 +511,7 @@ def run_ffmpeg(
     A cancelled run returns (True, None): the caller keys off its own
     cancel_event, which is what distinguishes the two success shapes.
     """
-    creationflags = 0
-    if sys.platform == "win32":
-        # Required for CTRL_BREAK_EVENT delivery (the fallback rung).
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+    creationflags = ffmpeg_popen_flags()
 
     try:
         proc = subprocess.Popen(

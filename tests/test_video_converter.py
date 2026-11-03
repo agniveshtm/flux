@@ -19,6 +19,7 @@ freezes the suite.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile as _tempfile
 import time
@@ -454,6 +455,43 @@ def test_pick_encoder_follows_the_preference_table(
     assert ffmpeg_module.pick_encoder() is None
     assert not ffmpeg_module.video_available()
     assert not (set(ffmpeg_module.MP4_ENCODERS) & ffmpeg_module.probe_encoders())
+
+
+def test_every_ffmpeg_spawn_suppresses_the_console_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Console children must not flash a black shell in the windowed build.
+
+    A packaged Flux has no console, so Windows gives every console child
+    (-encoders, -muxers, each encode, taskkill on cancel) its own console
+    window. That is the shell that flickers twice before the UI appears and
+    once per conversion; every spawn passes the no-window flag instead.
+    """
+    runs: list[dict[str, object]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        runs.append(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ffmpeg_module, "locate_ffmpeg", lambda: Path("ffmpeg"))
+    monkeypatch.setattr(ffmpeg_module.subprocess, "run", fake_run)
+    ffmpeg_module.reset_probe_cache()
+
+    ffmpeg_module.probe_encoders()
+    ffmpeg_module.probe_muxers()
+
+    assert len(runs) == 2, "both capability probes should spawn exactly once"
+    for kwargs in runs:
+        assert kwargs.get("creationflags") == ffmpeg_module.NO_WINDOW_FLAGS
+
+    # run_ffmpeg keeps CREATE_NEW_PROCESS_GROUP for the CTRL_BREAK cancel rung
+    # and adds the no-window flag on top of it.
+    flags = ffmpeg_module.ffmpeg_popen_flags()
+    assert flags & ffmpeg_module.NO_WINDOW_FLAGS == ffmpeg_module.NO_WINDOW_FLAGS
+    if sys.platform == "win32":
+        assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
+
+    ffmpeg_module.reset_probe_cache()
 
 
 def test_video_outputs_are_gated_per_container(

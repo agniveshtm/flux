@@ -31,7 +31,7 @@ from flux.services import (
     UpdateInfo,
     Updater,
 )
-from flux.services.ffmpeg import VIDEO_INPUT_FORMATS, locate_ffmpeg
+from flux.services.ffmpeg import NO_WINDOW_FLAGS, VIDEO_INPUT_FORMATS, locate_ffmpeg
 
 
 @dataclass
@@ -539,6 +539,7 @@ class FluxAPI:
                     cmd,
                     capture_output=True,
                     timeout=self._VIDEO_PREVIEW_TIMEOUT,
+                    creationflags=NO_WINDOW_FLAGS,
                 )
             except (OSError, subprocess.SubprocessError) as exc:
                 return self._error(

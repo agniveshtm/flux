@@ -228,7 +228,11 @@ class BaseConverter(ABC):
   process machinery — binary location, the `-encoders` capability probe,
   progress parsing from `out_time`/`Duration`, and the three-rung cancel
   chain — lives once in `services/ffmpeg.py::run_ffmpeg`; the image converter
-  reuses the same pump for video→GIF.
+  reuses the same pump for video→GIF. Every ffmpeg/taskkill spawn passes
+  `NO_WINDOW_FLAGS` (`CREATE_NO_WINDOW` on Windows): a windowed build has no
+  console, so without it each child gets its own black window that flashes
+  over the UI — once per probe at startup, once per conversion, preview and
+  cancel.
 - **Phase 2.2**: the video converter now writes MP4, WebM, MKV, MOV and AVI,
   and `FFmpegAudioConverter` (`audio_converter.py`, kind `audio`) extracts
   MP3/WAV from the same containers. Codec tables live in
