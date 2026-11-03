@@ -466,6 +466,11 @@ def test_every_ffmpeg_spawn_suppresses_the_console_window(
     (-encoders, -muxers, each encode, taskkill on cancel) its own console
     window. That is the shell that flickers twice before the UI appears and
     once per conversion; every spawn passes the no-window flag instead.
+
+    This half pins the two probes and the shared flag helper. The encode and
+    kill launches are checked against their real call sites in the two tests
+    below, because asserting on the helper alone would pass even if run_ffmpeg
+    or taskkill dropped the flag.
     """
     runs: list[dict[str, object]] = []
 
@@ -492,6 +497,74 @@ def test_every_ffmpeg_spawn_suppresses_the_console_window(
         assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
 
     ffmpeg_module.reset_probe_cache()
+
+
+def test_run_ffmpeg_launches_with_the_no_window_flags(
+    fake_ffmpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The caller boundary must pass the flags, not just the helper.
+
+    Asserting on ffmpeg_popen_flags() alone proves the constant is right, not
+    that run_ffmpeg uses it: a Popen call that dropped creationflags would
+    still pass that test while every conversion flashed a console again. So
+    Popen is intercepted at the real call site and its kwargs inspected.
+    """
+    launches: list[dict[str, object]] = []
+    real_popen = subprocess.Popen
+
+    def recording_popen(*args: object, **kwargs: object):
+        launches.append(kwargs)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(ffmpeg_module.subprocess, "Popen", recording_popen)
+    output = tmp_path / "out.mp4"
+
+    ok, error = ffmpeg_module.run_ffmpeg(
+        [str(fake_ffmpeg), "-progress", "pipe:1", "-y", str(output)],
+        progress_cb=lambda current, total: None,
+        cancel_event=Event(),
+        expected_output=output,
+    )
+
+    assert ok, error
+    assert len(launches) == 1, launches
+    flags = launches[0].get("creationflags")
+    assert isinstance(flags, int)
+    assert flags & ffmpeg_module.NO_WINDOW_FLAGS == ffmpeg_module.NO_WINDOW_FLAGS
+    if sys.platform == "win32":
+        assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="taskkill is the Windows kill rung"
+)
+def test_the_kill_rung_suppresses_the_taskkill_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelling must not flash a console either: taskkill is a console app.
+
+    kill_process_tree runs when the first two cancel rungs fail, i.e. exactly
+    when the user is already waiting on a wedged encode - a black shell there
+    is the worst moment for one.
+    """
+    runs: list[dict[str, object]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        runs.append(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    class _Proc:
+        pid = 424242
+
+        def kill(self) -> None:  # pragma: no cover - taskkill returns first
+            raise AssertionError("taskkill should end the tree before proc.kill")
+
+    monkeypatch.setattr(ffmpeg_module.subprocess, "run", fake_run)
+
+    ffmpeg_module.kill_process_tree(_Proc())  # type: ignore[arg-type]
+
+    assert len(runs) == 1, runs
+    assert runs[0].get("creationflags") == ffmpeg_module.NO_WINDOW_FLAGS
 
 
 def test_video_outputs_are_gated_per_container(
