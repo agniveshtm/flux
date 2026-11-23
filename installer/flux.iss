@@ -1,13 +1,16 @@
 ; Flux - Inno Setup script
 ;
-; Packages the PyInstaller one-file build (dist\flux.exe) into the Windows
-; setup executable that ships alongside it in every GitHub release:
+; Packages the PyInstaller one-file build (dist\flux.exe) together with the
+; ffmpeg sidecar (dist\ffmpeg.exe) into the Windows setup executable that
+; ships in every GitHub release:
 ;
+;   Copy-Item vendor\ffmpeg.exe dist\ffmpeg.exe
 ;   ISCC /DMyAppVersion=<x.y.z> installer\flux.iss
 ;     -> dist\flux-setup-<x.y.z>.exe
 ;
-; .github/workflows/release.yml passes the tag version. The fallback below
-; only serves manual local builds - keep it in sync with pyproject.toml.
+; .github/workflows/release.yml passes the tag version and stages the sidecar.
+; The fallback below only serves manual local builds - keep it in sync with
+; pyproject.toml.
 #ifndef MyAppVersion
   #define MyAppVersion "0.5.0"
 #endif
@@ -16,6 +19,8 @@
 #define MyAppPublisher "agniveshtm"
 #define MyAppURL "https://github.com/agniveshtm/flux"
 #define MyAppExeName "flux.exe"
+#define MyFfmpegExeName "ffmpeg.exe"
+#define MyFfmpegLicense "LICENSE-ffmpeg.txt"
 
 [Setup]
 ; A stable AppId is what makes a new setup recognize and upgrade/replace the
@@ -56,6 +61,15 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; In a frozen build locate_ffmpeg() looks for ffmpeg.exe beside sys.executable,
+; so the sidecar has to land in the same {app} folder as flux.exe. Without this
+; row an installed copy silently runs image-only even though the release
+; advertises video/audio conversion. release.yml stages the binary in dist\
+; before ISCC runs; test.yml writes a placeholder for the compile check.
+Source: "..\dist\{#MyFfmpegExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; The sidecar is GPLv3 (gyan.dev essentials enables libx264), so its licence
+; text must accompany the binary - see vendor/README.md.
+Source: "..\vendor\{#MyFfmpegLicense}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
