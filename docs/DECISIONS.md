@@ -184,7 +184,7 @@
 - **Decision:** Ship `vendor/ffmpeg.exe` as the gyan.dev *essentials* 9.0.2 build (downloaded from the GyanD/codexffmpeg GitHub mirror, SHA-256 checked against the release API `digest`, provenance pinned in `vendor/README.md`), and keep the MP4 encoder preference `libx264 → libvpx-vp9` by availability. Finalizes the tentative ffmpeg lean from DECISIONS 2026-09-19.
 - **Alternatives:** BtbN `lgpl-master` builds (smaller licence surface, but **no libx264**); BtbN `gpl-master` (has libx264, but tracks master — no immutable version to pin); vp9-first to stay LGPL-friendly (breaks the report's locked "Phase 2.1 MP4/H.264" contract); system-installed ffmpeg (no guarantee on user machines, and tests must run without one); `moviepy`/`imageio-ffmpeg` wrappers (extra Python layers over the same binary, weaker process control).
 - **Why:** libx264-first was already locked pre-research for compatibility, so the binary *must* contain it — gyan essentials is the only version-pinned Windows build that does. The GitHub mirror gives an immutable tag plus a verifiable digest instead of a mutable download URL. GPLv3 stays with the binary because Flux invokes it over argv + pipes and never links (report §1.2.1); capability-gating means a machine without it simply runs the image-only app.
-- **Consequence:** `vendor/*.exe` is gitignored (105 MB) while `vendor/README.md` carries the re-download/verify recipe; `video_available()` decides the whole video surface at once; `tests/test_vendor_ffmpeg.py` runs real encodes only when a binary resolves and skips otherwise. Release packaging (shipping the exe beside `flux.exe`) is still open — see the 2026-10-24 timeline entry.
+- **Consequence:** `vendor/*.exe` is gitignored (105 MB) while `vendor/README.md` carries the re-download/verify recipe; `video_available()` decides the whole video surface at once; `tests/test_vendor_ffmpeg.py` runs real encodes only when a binary resolves and skips otherwise. Release packaging (shipping the exe beside `flux.exe`) was left open here and is now resolved by the 2026-11-23 decision below.
 
 ## 2026-10-24 — GIF stays the image converter's output; the video converter only reads it
 
@@ -227,3 +227,33 @@
 - **Alternatives:** inherit the image path's "`maxEdge <= 0` means as stored" (a video has no stored still, and a 1px frame is useless); cap width only with height `-2` (a portrait clip derives a height past the requested edge); rely on the post-read `_MAX_PREVIEW_BYTES` backstop (ffmpeg has already allocated the frame by then).
 - **Why:** `maxEdge` is bridge input, so it must be bounded before it becomes filter text and allocation size — clamping at the source fixes the root cause instead of trimming the result afterwards. Capping both edges is what makes "longest edge at most `maxEdge`" true for portrait sources.
 - **Consequence:** `tests/test_preview.py` asserts the clamp for `0`, negative and `100_000`, and `test_vendor_ffmpeg.py` decodes a real 180x320 clip at `maxEdge=100` and checks `max(size) <= 100` with height still greater than width.
+
+## 2026-11-23 — Ship ffmpeg as an installer sibling, not inside the PyInstaller payload
+
+- **Decision:** `installer/flux.iss` places `dist\ffmpeg.exe` in `{app}` beside
+  `flux.exe`, together with `LICENSE-ffmpeg.txt`. `release.yml` copies
+  `vendor\ffmpeg.exe` into `dist\` before ISCC, publishes the same binary as an
+  optional release asset for portable installs, and fails the release if the
+  compiled setup reaches 100 MB. `test.yml` writes a small placeholder for the
+  same path so the installer compile check exercises the real `[Files]` rows.
+- **Alternatives:** (a) add the binary to `flux.spec`'s one-file bundle and
+  teach `locate_ffmpeg()` to look in `_MEIPASS`; (b) publish a second "full"
+  installer alongside the image-only one; (c) keep the status quo and ship
+  image-only releases.
+- **Why:** `locate_ffmpeg()` already resolves the frozen binary beside
+  `sys.executable`, so option (a) would duplicate the 105 MB binary *and*
+  require new resolution logic and new tests for a path no other resource
+  uses. Option (b) doubles the installer surface and leaves users to pick the
+  right download; the site and the updater both assume a single setup. Option
+  (c) was the bug: the release advertised video while installed copies could
+  not run it. The size objection is measured rather than assumed — LZMA2
+  compresses the vendored binary to ~30 MiB, and the cap is now enforced
+  against the actual artifact instead of an estimate. The optional asset keeps
+  the portable download a single file while giving those users an honest
+  upgrade path.
+- **Consequence:** installed copies gain the full video/audio matrix with no
+  user action; portable downloads stay image-only until the user copies the
+  companion beside `flux.exe` (README). The updater ignores the companion
+  because `pick_setup_asset` only matches names containing "setup"/"installer".
+  Adding a future `Source` row to the `.iss` means adding a placeholder in
+  `test.yml` too, or the PR installer check will fail at compile time.

@@ -129,9 +129,12 @@ then shows the quiet "could not check" with a retry rather than a stale update
 offer.
 
 Every release (built by `.github/workflows/release.yml` on each `v*` tag)
-carries three Windows files: the portable `flux.exe`, the Inno Setup installer
-`flux-setup-<ver>.exe` and that installer's `flux-setup-<ver>.exe.sha256`. The
-updater downloads the **installer** -
+carries four Windows files: the portable `flux.exe`, the Inno Setup installer
+`flux-setup-<ver>.exe`, that installer's `flux-setup-<ver>.exe.sha256`, and an
+optional `ffmpeg.exe` companion to copy next to the portable exe. The setup
+bundles both `flux.exe` and the sidecar into `{app}`; `release.yml` stages
+`dist\ffmpeg.exe` before ISCC and fails the build if the setup reaches the
+100 MB cap. The updater downloads the **installer** -
 `pick_setup_asset` refuses to fall back to the portable exe - into the OS
 temp dir (`flux-update/`), streamed in chunks to a `.part` file that is
 renamed only when complete. Everything the payload supplies is validated before
@@ -298,9 +301,14 @@ essentials 9.0.2, GPLv3, ~105 MB, with `libx264`, `libvpx-vp9`, `libopus`,
 `libmp3lame` and `pcm_s16le` (DECISIONS 2026-10-24 and 2026-11-01).
 `locate_ffmpeg()` resolves it beside the frozen executable first (the Inno
 Setup deployment path), then `vendor/` in a source checkout, then PATH as a
-dev convenience. It is never linked: invocation is argv + pipes, which keeps
-the GPL with the binary. `vendor/*.exe` is gitignored; `vendor/README.md`
-carries the source URL, version and SHA-256.
+dev convenience. The installer copies the binary into `{app}` alongside
+`flux.exe` (and ships `LICENSE-ffmpeg.txt` with it); release.yml stages it from
+`vendor/` into `dist/` before ISCC, and the PR installer check writes a small
+placeholder so the same `[Files]` rows compile on every pull request. The
+portable exe has no such sibling, which is why the release also offers the
+optional companion asset. The binary is never linked: invocation is argv +
+pipes, which keeps the GPL with the binary. `vendor/*.exe` is gitignored;
+`vendor/README.md` carries the source URL, version and SHA-256.
 
 ## Folder Structure
 
@@ -318,7 +326,7 @@ flux/
 │       ├── release.yml           # tag-driven release pipeline
 │       └── pages.yml             # deploys docs/index.html to GitHub Pages
 ├── installer/
-│   └── flux.iss                  # Inno Setup script (dist/flux.exe → setup)
+│   └── flux.iss                  # Inno Setup script (dist/flux.exe + dist/ffmpeg.exe → setup)
 ├── src/
 │   └── flux/
 │       ├── __init__.py           # __version__ (runtime version source)

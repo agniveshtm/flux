@@ -4,7 +4,7 @@
 
 Flux is a desktop file converter application for general consumers. It provides a simple, offline-first interface for converting between common image formats (JPG, PNG, WebP, ICO, AVIF, GIF and HEIC/HEIF), and — since Phase 2.1 — for converting video into MP4, still frames and animated GIF. Phase 2.2 widens the video matrix to WebM, MKV, MOV and AVI, and adds MP3/WAV audio extraction from clips. Conversion itself runs entirely offline — the only network traffic is the optional in-app update check — and the app is packaged as a native Windows installer.
 
-**Tech Stack**: Python + pywebview (desktop shell), Vue 3 + Tailwind CSS (frontend, in `src/flux/frontend`), Pillow + pillow-heif (image conversion), a vendored ffmpeg sidecar binary (video conversion, `vendor/ffmpeg.exe`), PyInstaller + Inno Setup (packaging).
+**Tech Stack**: Python + pywebview (desktop shell), Vue 3 + Tailwind CSS (frontend, in `src/flux/frontend`), Pillow + pillow-heif (image conversion), a vendored ffmpeg sidecar binary (video conversion, `vendor/ffmpeg.exe`, shipped beside `flux.exe` by the installer), PyInstaller + Inno Setup (packaging).
 
 ## Goals
 
@@ -98,10 +98,14 @@ Deliberate limits:
   the same pair — gif → mp4, clip → gif — is a video conversion, while
   still → gif remains an image one; the grouping ships from the backend in
   `getSupportedFormats().rings`.
-- Release packaging is an open item: `locate_ffmpeg` already looks for
-  `ffmpeg.exe` beside the frozen executable, but the Inno Setup script does
-  not ship it yet, so packaged builds currently run image-only — and bundling
-  the 105 MB binary collides with the <100 MB installer success criterion.
+- The installer ships `ffmpeg.exe` beside `flux.exe` in `{app}`, the same
+  directory `locate_ffmpeg` probes in a frozen build, so installed copies get
+  the full video/audio matrix. The portable `flux.exe` remains a single file
+  and is image-only unless the optional `ffmpeg.exe` release asset is copied
+  next to it (documented in the README).
+- LZMA2 solid compression brings the 105 MB binary down to roughly 30 MiB
+  inside the setup; `release.yml` measures the real artifact and fails the
+  release if it reaches the 100 MB cap rather than trusting that estimate.
 
 
 ## Phase 2.2 — Video containers and audio extraction
@@ -214,9 +218,9 @@ Deliberate limits:
       libx264 — pinned by `test_the_vendored_build_includes_libx264`
 - [x] Real-ffmpeg encodes decode back cleanly (`ffmpeg -v error … -f null -`)
 - [x] Tests 111 → 141; check-frontend and all four UI checks green
-- [ ] Release packaging: installer ships `ffmpeg.exe` next to `flux.exe`
-      (open — see the packaging note in Phase 2.1; also affects the <100 MB
-      installer criterion)
+- [x] Release packaging: installer ships `ffmpeg.exe` next to `flux.exe`, with
+      its GPLv3 licence text; `release.yml` stages the binary, enforces the
+      100 MB cap and publishes an optional companion asset for portable installs
 
 ## Phase 2.2 acceptance criteria
 
@@ -241,5 +245,5 @@ Deliberate limits:
       `pcm_s16le` — pinned alongside `test_the_vendored_build_includes_libx264`
 - [x] `uv run pytest tests/ -q`, `node scripts/check-frontend.js` and all
       four UI checks are green
-- [ ] Release packaging still does not ship `ffmpeg.exe` (carried over from
-      Phase 2.1; needs the size decision)
+- [x] Release packaging ships the sidecar (carried over from Phase 2.1 and
+      resolved — see the installer and size notes in that section)
