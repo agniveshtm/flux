@@ -59,10 +59,32 @@ jobs:
           if ($proc.ExitCode -ne 0) { throw "flux.exe --version exited with code $($proc.ExitCode)" }
           $reported = (Get-Content $out -Raw).Trim()
           if ($reported -ne "flux $version") { throw "flux.exe --version reported '$reported', expected 'flux $version'" }
+      - name: Fetch the verified ffmpeg binary
+        # vendor/*.exe is gitignored, so a clean checkout has no sidecar.
+        # Re-download the pinned gyan.dev archive and verify both the
+        # archive and the extracted exe before anything is staged or run
+        # (provenance and digests in vendor/README.md).
+        shell: pwsh
+        run: |
+          $archive = "ffmpeg-9.0.2-essentials_build.zip"
+          $archiveDigest = "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba"
+          $exeDigest = "3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec"
+          Invoke-WebRequest -Uri "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/$archive" -OutFile $archive
+          $actualArchive = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLower()
+          if ($actualArchive -ne $archiveDigest) { throw "ffmpeg archive digest mismatch: $actualArchive" }
+          $extract = "vendor\_ffmpeg_extract"
+          Expand-Archive -Path $archive -DestinationPath $extract -Force
+          $exe = Get-ChildItem -Path $extract -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "ffmpeg.exe not found in the verified archive" }
+          $actualExe = (Get-FileHash -Algorithm SHA256 -Path $exe.FullName).Hash.ToLower()
+          if ($actualExe -ne $exeDigest) { throw "ffmpeg.exe digest mismatch: $actualExe" }
+          Move-Item -Path $exe.FullName -Destination "vendor\ffmpeg.exe" -Force
+          Remove-Item -Recurse -Force $extract
+          Remove-Item -Force $archive
       - name: Stage the ffmpeg sidecar for the installer
         # A frozen build resolves ffmpeg.exe beside sys.executable, and the
-        # installer packages both binaries out of dist\. The vendored binary
-        # is gitignored, so it has to be copied there on every release.
+        # installer packages both binaries out of dist\. The binary was
+        # fetched and verified by the previous step.
         shell: pwsh
         run: |
           Copy-Item -Path "vendor\ffmpeg.exe" -Destination "dist\ffmpeg.exe"
@@ -84,15 +106,15 @@ jobs:
       - name: Enforce the installer size budget
         # The 105 MB sidecar is LZMA2-compressed to ~30 MiB inside the setup,
         # but cap the real artifact rather than trusting that estimate: the
-        # PRD's "<100 MB installer" success criterion is a release gate.
+        # PRD's "<100 MB installer" criterion is decimal MB, not MiB.
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
           $setup = "dist\flux-setup-$version.exe"
           $bytes = (Get-Item $setup).Length
-          $limit = 100 * 1024 * 1024
-          $mib = [math]::Round($bytes / 1MB, 1)
-          Write-Host "Installer is $mib MiB ($bytes bytes); limit is 100 MiB"
+          $limit = 100 * 1000 * 1000
+          $mb = [math]::Round($bytes / 1000000, 1)
+          Write-Host "Installer is $mb MB ($bytes bytes); limit is 100 MB"
           if ($bytes -ge $limit) { throw "Installer exceeds the 100 MB success criterion" }
       - name: Publish the installer's SHA-256
         shell: pwsh
@@ -111,12 +133,14 @@ jobs:
         with:
           name: Release ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          # The last glob is an optional companion for the portable exe:
-          # copy it next to flux.exe to unlock video. The updater ignores it
-          # (no "setup" in the name) and keeps downloading the installer.
+          # The last two globs are optional companions for the portable exe:
+          # copy the binary next to flux.exe to unlock video and keep the
+          # licence text beside it (GPLv3). The updater ignores both (no
+          # "setup" in their names) and keeps downloading the installer.
           files: |
             dist/flux.exe
             dist/flux-setup-*.exe
             dist/flux-setup-*.exe.sha256
             dist/ffmpeg.exe
+            vendor/LICENSE-ffmpeg.txt
           generate_release_notes: true

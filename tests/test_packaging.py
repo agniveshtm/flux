@@ -178,10 +178,26 @@ def test_test_workflow_stages_a_placeholder_sidecar_for_iscc() -> None:
     )
 
 
-def test_release_workflow_enforces_the_installer_size_cap() -> None:
-    """The PRD's '<100 MB installer' criterion is a release gate, not a hope."""
+def test_release_workflow_fetches_a_verified_ffmpeg() -> None:
+    """A clean checkout has no gitignored sidecar; CI must fetch and verify it."""
     text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    assert "100 * 1024 * 1024" in text, "no 100 MB cap in the release workflow"
+    readme = (REPO_ROOT / "vendor" / "README.md").read_text(encoding="utf-8")
+    archive_digest = re.search(r"SHA-256 \| `([0-9a-f]+)`", readme)
+    assert archive_digest, "vendor/README.md no longer pins the archive digest"
+
+    assert "ffmpeg-9.0.2-essentials_build.zip" in text, "no pinned archive to fetch"
+    assert archive_digest.group(1) in text, (
+        "release.yml does not verify the archive against vendor/README.md"
+    )
+    assert "Get-FileHash" in text, "the download is not digest-checked"
+    assert "vendor\\ffmpeg.exe" in text, "the verified binary is not staged"
+
+
+def test_release_workflow_enforces_the_installer_size_cap() -> None:
+    """The PRD's '<100 MB installer' criterion is decimal MB, not MiB."""
+    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "100 * 1000 * 1000" in text, "no 100 MB cap in the release workflow"
+    assert "100 * 1024 * 1024" not in text, "the size gate still uses MiB"
 
 
 def test_release_workflow_publishes_the_optional_portable_sidecar() -> None:
@@ -189,6 +205,9 @@ def test_release_workflow_publishes_the_optional_portable_sidecar() -> None:
     text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     assert "dist/ffmpeg.exe" in text, (
         "portable downloads would stay image-only with no companion asset"
+    )
+    assert "vendor/LICENSE-ffmpeg.txt" in text, (
+        "the GPLv3 sidecar is published without its licence text"
     )
 
 

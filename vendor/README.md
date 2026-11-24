@@ -40,3 +40,10 @@ process.
    table.
 3. Run `uv run pytest tests/ -q` - the vendored-binary tests are skipped
    when this file is absent and run for real when it is present.
+
+`.github/workflows/release.yml` repeats this fetch on a clean checkout: it
+downloads the pinned archive, checks its SHA-256 against the digest above and
+the extracted `ffmpeg.exe` against
+`3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec`, then
+stages the binary for the installer. Update both digests here and in the
+workflow together when replacing the binary.
