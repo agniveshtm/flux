@@ -20,6 +20,7 @@ to open .heic files with an error the release smoke test does not catch.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -145,7 +146,11 @@ def test_frozen_ffmpeg_resolves_beside_the_executable(
     elsewhere (a _MEIPASS resource, say), shipping the sidecar beside flux.exe
     would silently stop working while every installer test stayed green.
     """
-    sidecar = tmp_path / "ffmpeg.exe"
+    # locate_ffmpeg uses the platform's executable name: ffmpeg.exe on
+    # Windows (what the installer ships), ffmpeg elsewhere. This suite runs
+    # on Ubuntu too, so name the stand-in the way the code actually probes.
+    name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    sidecar = tmp_path / name
     sidecar.write_bytes(b"MZ")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(tmp_path / "flux.exe"))
