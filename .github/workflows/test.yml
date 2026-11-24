@@ -63,15 +63,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      # The .iss only needs dist\flux.exe to exist in order to compile - the
-      # real exe is built by the release workflow. A placeholder keeps this
-      # check fast while still validating the whole script end to end
-      # (directives, [Files]/[Icons]/[Run] entries, artifact naming).
+      # The .iss needs dist\flux.exe and dist\ffmpeg.exe to exist in order to
+      # compile - the real binaries are built/staged by release.yml. Small
+      # placeholders keep this check fast while still validating the whole
+      # script end to end (directives, [Files]/[Icons]/[Run] entries, artifact
+      # naming). A missing ffmpeg row would fail here, which is the point.
       - name: Compile installer/flux.iss
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Set-Content -Path dist\flux.exe -Value 'placeholder' -NoNewline
+          Set-Content -Path dist\ffmpeg.exe -Value 'placeholder' -NoNewline
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
             choco install innosetup -y --no-progress

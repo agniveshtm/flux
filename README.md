@@ -228,7 +228,7 @@ The frontend script has no npm dependencies: it runs `node --check` over every s
 | `python` (ubuntu + windows) | pytest on both platforms, plus `flux.spec` syntax                                        |
 | `frontend`           | `scripts/check-frontend.js` — syntax, template compilation, `index.html` wiring                |
 | `css`                | rebuilds Tailwind with the pinned version and fails if the committed `app.css` is stale        |
-| `installer`          | compiles `installer/flux.iss` with ISCC and asserts the setup artifact is produced             |
+| `installer`          | compiles `installer/flux.iss` with ISCC (placeholder exe + sidecar) and asserts the setup artifact is produced |
 
 ## Installation
 
@@ -242,6 +242,7 @@ The frontend script has no npm dependencies: it runs `node --check` over every s
 Download `flux-setup-<version>.exe` from [Releases](https://github.com/agniveshtm/flux/releases), run it, and launch Flux from the Start Menu.
 
 - Per-user install (`%LOCALAPPDATA%\Programs\Flux`) — no admin prompt, no UAC on updates
+- Ships `ffmpeg.exe` and its GPLv3 licence beside `flux.exe`, so video/audio conversion works out of the box
 - Start Menu entry always; optional desktop shortcut
 - Uninstall from *Apps & features* / *Add or remove programs*
 
@@ -249,7 +250,9 @@ Download `flux-setup-<version>.exe` from [Releases](https://github.com/agnivesht
 
 Download `flux.exe` from [Releases](https://github.com/agniveshtm/flux/releases) and run it — no installation and no Python required.
 
-> **Tip:** Releases carry the exe, the installer and the installer's SHA-256. The setup is what the in-app updater downloads — and verifies against that checksum before offering **Restart & update** — so installed copies upgrade themselves in place.
+> **Video needs the companion:** the portable exe is a single file and starts image-only. Download `ffmpeg.exe` and `LICENSE-ffmpeg.txt` from the same release and put both in the folder with `flux.exe` to unlock video and audio conversion and keep the GPLv3 licence with the binary. The Windows setup does this for you.
+
+> **Tip:** Releases carry the exe, the installer, the installer's SHA-256 and the optional `ffmpeg.exe` companion with its licence text. The setup is what the in-app updater downloads — and verifies against that checksum before offering **Restart & update** — so installed copies upgrade themselves in place.
 
 ### Install from source (development)
 
@@ -260,7 +263,7 @@ uv sync
 uv run flux
 ```
 
-Release artifacts are the exe, the installer and the installer's SHA-256 only — no wheel or sdist is published. On macOS/Linux the app runs from source wherever pywebview has a native backend (WebKit, GTK or Qt).
+Release artifacts are the exe, the installer, the installer's SHA-256 and the optional `ffmpeg.exe` companion with its licence text — no wheel or sdist is published. On macOS/Linux the app runs from source wherever pywebview has a native backend (WebKit, GTK or Qt).
 
 ## Building & releasing
 
@@ -268,8 +271,11 @@ Build the artifacts locally:
 
 ```bash
 uv run pyinstaller flux.spec                    # → dist/flux.exe
+cp vendor/ffmpeg.exe dist/ffmpeg.exe              # sidecar for the installer
 ISCC /DMyAppVersion=0.1.0 installer\flux.iss    # → dist/flux-setup-0.1.0.exe
 ```
+
+The `.iss` packages both binaries into `{app}`. `release.yml` performs the same staging and fails the build if the compiled setup reaches the 100 MB cap.
 
 To diagnose a packaged build, set `FLUX_DEBUG=1`: `webview.start` then runs with `debug=True` and the resolved frontend/icon paths are logged to stderr. The exe is windowed, so stderr only carries output when a handle is attached — e.g. `Start-Process -RedirectStandardError err.txt dist\flux.exe`.
 
@@ -282,7 +288,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-`release.yml` then verifies that the tag, `pyproject.toml` and `flux.__version__` all agree, runs the test suite, builds `flux.exe` (smoke-tested via `--version`), compiles the installer with that version, publishes the installer's SHA-256 beside it (the digest the updater verifies before installing), and uploads those files to the release with auto-generated notes. The tag version is what the updater compares against, so the three-way check is what keeps updates working for everyone already installed.
+`release.yml` then verifies that the tag, `pyproject.toml` and `flux.__version__` all agree, runs the test suite, builds `flux.exe` (smoke-tested via `--version`), stages the vendored ffmpeg sidecar into `dist\`, compiles the installer with that version, enforces the 100 MB size cap, publishes the installer's SHA-256 beside it (the digest the updater verifies before installing), and uploads those files — plus the optional sidecar and its licence — to the release with auto-generated notes. The tag version is what the updater compares against, so the three-way check is what keeps updates working for everyone already installed.
 
 ## Documentation
 

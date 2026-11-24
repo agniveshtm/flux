@@ -222,3 +222,31 @@ through as literals. Tested in Git Bash - curl receives exactly two arguments.
 - Diagnosed the "shell flickers twice before the app opens" report. It was not threading: `create_window()` runs the registry's capability probes inline on the main thread, and each probe is a `subprocess.run` of a **console** ffmpeg from a **console-less** packaged build, so Windows gave every child its own console window. Two probes (`-encoders`, then `-muxers`, the latter added with the muxer gating) produced exactly two flashes before `webview.start()`; every later encode, preview and cancel flashed again.
 - Fix: `NO_WINDOW_FLAGS` (`subprocess.CREATE_NO_WINDOW` on Windows, `0` elsewhere) is passed by both probes, `kill_process_tree`'s `taskkill`, the poster-frame preview, and the image converter's video→still extraction; `ffmpeg_popen_flags()` ORs it with `CREATE_NEW_PROCESS_GROUP` for `run_ffmpeg`, so the CTRL_BREAK cancel rung is unchanged. Tests **181 → 182**: one asserts both probes and the encode flags carry the bit while keeping the process-group bit on Windows, and the preview test pins the kwarg. Real-ffmpeg encodes now run with the flag and still decode cleanly, so it does not disturb encoding.
 - Measured the same path at 3.4 s cold for the two probes against `vendor/ffmpeg.exe` (105 MB binary) — pure startup latency, unrelated to the flashes.
+
+## 2026-11-23 (ffmpeg ships in the installer)
+
+- Closed the open packaging item from Phases 2.1/2.2. `installer/flux.iss` now
+  copies `dist\ffmpeg.exe` into `{app}` next to `flux.exe` — the exact location
+  `locate_ffmpeg()` probes in a frozen build — and ships
+  `LICENSE-ffmpeg.txt` alongside it (GPLv3, since the essentials build enables
+  libx264). Installed copies now get the full video/audio matrix instead of the
+  image-only fallback.
+- `release.yml` stages `vendor\ffmpeg.exe` into `dist\` before ISCC (the binary
+  is gitignored), enforces the PRD's "<100 MB installer" criterion against the
+  compiled artifact, and publishes the same binary as an optional release asset
+  so portable users can copy it next to `flux.exe`. The updater ignores it:
+  `pick_setup_asset` only matches names containing "setup"/"installer".
+  `test.yml` writes a small `dist\ffmpeg.exe` placeholder for its ISCC check,
+  so the PR job still exercises the real `[Files]` rows.
+- The size objection was measured, not guessed: LZMA2 compresses the 105 MB
+  binary to ~30 MiB, and the cap is now a release gate instead of an estimate.
+  Rationale and rejected alternatives in DECISIONS 2026-11-23.
+- Tests: added seven packaging checks to `tests/test_packaging.py` — sidecar row
+  and its `{app}` destination, licence row, frozen resolution beside
+  `sys.executable`, release/PR staging order, the size gate and the portable
+  companion asset. Reused that file rather than adding a new one; audited all
+  eleven test files and found no redundant one, so none were removed. Scoped
+  the existing HEIF skip to its own test so the new checks run on builds
+  without pillow-heif. Full suite: 191 passed.
+- Docs: PRD acceptance criteria for both phases ticked, ARCHITECTURE's release
+  and sidecar sections updated, README's install/build/CI instructions amended.
